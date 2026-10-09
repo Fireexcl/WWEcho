@@ -1,0 +1,492 @@
+{
+    "schema_version": 1,
+    "verified_at": "2026-10-09",
+    "game_version": null,
+    "scope": {
+        "rarity": 5,
+        "max_level": 25,
+        "main_stat_acquisition_modeled": false
+    },
+    "conventions": {
+        "stat_id_style": "snake_case",
+        "percent_stat_value_unit": "percentage_points",
+        "probability_unit": "ratio",
+        "published_probability_pct_unit": "percent",
+        "tier_probability_rule": "published_probability_pct[i] / sum(published_probability_pct)",
+        "tier_probability_note": "Normalize rounded official display values for sampling; do not treat inferred weights as official raw weights.",
+        "tier_alignment": "values[i] uses published_probability_pct[i] of its probability_distribution",
+        "stat_categories": {
+            "main_stats": "主词条",
+            "minor_stats": "小词条",
+            "sub_stats": "副词条"
+        }
+    },
+    "sources": {
+        "official_sub_stats": {
+            "status": "official",
+            "url": "https://sdk-global.kurogames.com/pro/agreement/common/language_ko/product_info",
+            "section": "2"
+        },
+        "community_main_minor_stats": {
+            "status": "community",
+            "url": "https://wutheringwaves.gg/echo-stats/"
+        }
+    },
+    "stat_definitions": {
+        "hp_flat": {
+            "name_zh": "固定生命",
+            "unit": "flat"
+        },
+        "atk_flat": {
+            "name_zh": "固定攻击",
+            "unit": "flat"
+        },
+        "def_flat": {
+            "name_zh": "固定防御",
+            "unit": "flat"
+        },
+        "hp_pct": {
+            "name_zh": "生命百分比",
+            "unit": "percentage_points"
+        },
+        "atk_pct": {
+            "name_zh": "攻击百分比",
+            "unit": "percentage_points"
+        },
+        "def_pct": {
+            "name_zh": "防御百分比",
+            "unit": "percentage_points"
+        },
+        "crit_rate": {
+            "name_zh": "暴击率",
+            "unit": "percentage_points"
+        },
+        "crit_dmg": {
+            "name_zh": "暴击伤害",
+            "unit": "percentage_points"
+        },
+        "energy_regen": {
+            "name_zh": "共鸣效率",
+            "unit": "percentage_points"
+        },
+        "basic_atk_dmg_bonus": {
+            "name_zh": "普攻伤害加成",
+            "unit": "percentage_points"
+        },
+        "heavy_atk_dmg_bonus": {
+            "name_zh": "重击伤害加成",
+            "unit": "percentage_points"
+        },
+        "resonance_skill_dmg_bonus": {
+            "name_zh": "共鸣技能伤害加成",
+            "unit": "percentage_points"
+        },
+        "resonance_liberation_dmg_bonus": {
+            "name_zh": "共鸣解放伤害加成",
+            "unit": "percentage_points"
+        },
+        "aero_dmg_bonus": {
+            "name_zh": "气动伤害加成",
+            "unit": "percentage_points"
+        },
+        "glacio_dmg_bonus": {
+            "name_zh": "冷凝伤害加成",
+            "unit": "percentage_points"
+        },
+        "fusion_dmg_bonus": {
+            "name_zh": "热熔伤害加成",
+            "unit": "percentage_points"
+        },
+        "electro_dmg_bonus": {
+            "name_zh": "导电伤害加成",
+            "unit": "percentage_points"
+        },
+        "havoc_dmg_bonus": {
+            "name_zh": "湮灭伤害加成",
+            "unit": "percentage_points"
+        },
+        "spectro_dmg_bonus": {
+            "name_zh": "衍射伤害加成",
+            "unit": "percentage_points"
+        },
+        "healing_bonus": {
+            "name_zh": "治疗效果加成",
+            "unit": "percentage_points"
+        }
+    },
+    "main_stats": {
+        "source": "community_main_minor_stats",
+        "max_values_by_cost": {
+            "1": {
+                "hp_pct": 22.8,
+                "atk_pct": 18.0,
+                "def_pct": 18.0
+            },
+            "3": {
+                "hp_pct": 30.0,
+                "atk_pct": 30.0,
+                "def_pct": 38.0,
+                "aero_dmg_bonus": 30.0,
+                "glacio_dmg_bonus": 30.0,
+                "fusion_dmg_bonus": 30.0,
+                "electro_dmg_bonus": 30.0,
+                "havoc_dmg_bonus": 30.0,
+                "spectro_dmg_bonus": 30.0,
+                "energy_regen": 32.0
+            },
+            "4": {
+                "hp_pct": 33.0,
+                "atk_pct": 33.0,
+                "def_pct": 41.5,
+                "crit_rate": 22.0,
+                "crit_dmg": 44.0,
+                "healing_bonus": 26.0
+            }
+        }
+    },
+    "minor_stats": {
+        "source": "community_main_minor_stats",
+        "max_values_by_cost": {
+            "1": {
+                "hp_flat": 2280
+            },
+            "3": {
+                "atk_flat": 100
+            },
+            "4": {
+                "atk_flat": 150
+            }
+        }
+    },
+    "probability_distributions": {
+        "standard_eight_tiers": {
+            "source": "official_sub_stats",
+            "published_probability_pct": [
+                6.7961,
+                7.7670,
+                20.3883,
+                24.2718,
+                17.4757,
+                14.5631,
+                5.8252,
+                2.9126
+            ]
+        },
+        "crit_eight_tiers": {
+            "source": "official_sub_stats",
+            "published_probability_pct": [
+                23.3333,
+                23.3333,
+                23.3333,
+                8.0000,
+                8.0000,
+                8.0000,
+                3.0000,
+                3.0000
+            ]
+        },
+        "atk_flat_four_tiers": {
+            "source": "official_sub_stats",
+            "published_probability_pct": [
+                6.7961,
+                52.4272,
+                37.8641,
+                2.9126
+            ]
+        },
+        "def_flat_four_tiers": {
+            "source": "official_sub_stats",
+            "published_probability_pct": [
+                14.5631,
+                44.6602,
+                32.0388,
+                8.7379
+            ]
+        }
+    },
+    "sub_stats": {
+        "source": "official_sub_stats",
+        "pool_size": 13,
+        "max_count": 5,
+        "allow_duplicate_types": false,
+        "allow_same_type_as_main_or_minor": true,
+        "tiers": {
+            "hp_flat": {
+                "values": [
+                    320,
+                    360,
+                    390,
+                    430,
+                    470,
+                    510,
+                    540,
+                    580
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "atk_flat": {
+                "values": [
+                    30,
+                    40,
+                    50,
+                    60
+                ],
+                "probability_distribution": "atk_flat_four_tiers"
+            },
+            "def_flat": {
+                "values": [
+                    40,
+                    50,
+                    60,
+                    70
+                ],
+                "probability_distribution": "def_flat_four_tiers"
+            },
+            "hp_pct": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "atk_pct": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "def_pct": {
+                "values": [
+                    8.1,
+                    9.0,
+                    10.0,
+                    10.9,
+                    11.8,
+                    12.8,
+                    13.8,
+                    14.7
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "crit_rate": {
+                "values": [
+                    6.3,
+                    6.9,
+                    7.5,
+                    8.1,
+                    8.7,
+                    9.3,
+                    9.9,
+                    10.5
+                ],
+                "probability_distribution": "crit_eight_tiers"
+            },
+            "crit_dmg": {
+                "values": [
+                    12.6,
+                    13.8,
+                    15.0,
+                    16.2,
+                    17.4,
+                    18.6,
+                    19.8,
+                    21.0
+                ],
+                "probability_distribution": "crit_eight_tiers"
+            },
+            "energy_regen": {
+                "values": [
+                    6.8,
+                    7.6,
+                    8.4,
+                    9.2,
+                    10.0,
+                    10.8,
+                    11.6,
+                    12.4
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "basic_atk_dmg_bonus": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "heavy_atk_dmg_bonus": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "resonance_skill_dmg_bonus": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            },
+            "resonance_liberation_dmg_bonus": {
+                "values": [
+                    6.4,
+                    7.1,
+                    7.9,
+                    8.6,
+                    9.4,
+                    10.1,
+                    10.9,
+                    11.6
+                ],
+                "probability_distribution": "standard_eight_tiers"
+            }
+        }
+    },
+    "activation": {
+        "source": "official_sub_stats",
+        "unlock_levels": [
+            5,
+            10,
+            15,
+            20,
+            25
+        ],
+        "exclude_activated_types": true,
+        "type_probability_rule": "1 / (pool_size - activated_count)",
+        "steps": [
+            {
+                "activated_count": 0,
+                "unlock_level": 5,
+                "candidate_count": 13,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 13
+                },
+                "published_type_probability_pct": 7.6923
+            },
+            {
+                "activated_count": 1,
+                "unlock_level": 10,
+                "candidate_count": 12,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 12
+                },
+                "published_type_probability_pct": 8.3333
+            },
+            {
+                "activated_count": 2,
+                "unlock_level": 15,
+                "candidate_count": 11,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 11
+                },
+                "published_type_probability_pct": 9.0909
+            },
+            {
+                "activated_count": 3,
+                "unlock_level": 20,
+                "candidate_count": 10,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 10
+                },
+                "published_type_probability_pct": 10.0000
+            },
+            {
+                "activated_count": 4,
+                "unlock_level": 25,
+                "candidate_count": 9,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 9
+                },
+                "published_type_probability_pct": 11.1111
+            }
+        ]
+    },
+    "reconstruction": {
+        "source": "official_sub_stats",
+        "required_rarity": 5,
+        "required_activated_count": 5,
+        "exclude_locked_types": true,
+        "allow_original_unlocked_type": true,
+        "type_probability_rule": "1 / (pool_size - locked_count)",
+        "probability_scope": "single_stat_type_not_any_slot_joint_probability",
+        "cases": [
+            {
+                "locked_count": 1,
+                "rerolled_count": 4,
+                "candidate_count": 12,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 12
+                },
+                "published_type_probability_pct": 8.3333
+            },
+            {
+                "locked_count": 2,
+                "rerolled_count": 3,
+                "candidate_count": 11,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 11
+                },
+                "published_type_probability_pct": 9.0909
+            },
+            {
+                "locked_count": 3,
+                "rerolled_count": 2,
+                "candidate_count": 10,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 10
+                },
+                "published_type_probability_pct": 10.0000
+            },
+            {
+                "locked_count": 4,
+                "rerolled_count": 1,
+                "candidate_count": 9,
+                "type_probability": {
+                    "numerator": 1,
+                    "denominator": 9
+                },
+                "published_type_probability_pct": 11.1111
+            }
+        ]
+    }
+}
