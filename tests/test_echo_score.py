@@ -3,7 +3,7 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, ROOT, EchoScorer, load_json, main
+from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, ROOT, EchoScorer, load_json, main
 
 
 class EchoScorerTests(unittest.TestCase):
