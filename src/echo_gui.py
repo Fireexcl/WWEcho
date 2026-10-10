@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
+from threading import Event
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QProgressBar, QPushButton, QScrollArea, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -30,6 +33,7 @@ QLabel#score { font-size: 38px; font-weight: 700; color: #2563eb; }
 QPushButton { background: #edf2fb; border: 1px solid #d8e2f2;
               border-radius: 6px; padding: 7px 15px; }
 QPushButton:hover { background: #dce8fc; }
+QPushButton:checked { background: #2563eb; color: white; border-color: #2563eb; }
 QPushButton#primary { background: #2563eb; color: white; border: none; }
 QComboBox, QSpinBox, QDoubleSpinBox { background: white; border: 1px solid #ced9e7;
                                    border-radius: 5px; padding: 5px; }
@@ -50,6 +54,46 @@ class ManualWeightInput(QDoubleSpinBox):
         pass
 
 
+class StrategySignals(QObject):
+    finished = Signal(int, object, str)
+
+
+class StrategyTask(QRunnable):
+    """只处理输入快照，不持有窗口；缓存仅由串行后台任务访问。"""
+
+    def __init__(self, version: int, snapshot: dict[str, Any],
+                 cache: dict[str, Any], cancelled: Event) -> None:
+        super().__init__()
+        self.version = version
+        self.snapshot = snapshot
+        self.cache = cache
+        self.cancelled = cancelled
+        self.signals = StrategySignals()
+
+    def run(self) -> None:
+        result, error = None, ""
+        try:
+            if self.cancelled.is_set():
+                return
+            # 延迟导入，策略模块/成本文件不可用时仍可正常评分。
+            from src.echo_strategy import ActivationPlanner, DEFAULT_COSTS
+
+            data = self.snapshot
+            costs = load_json(DEFAULT_COSTS)
+            key = json.dumps({name: data[name] for name in ("stats", "weights", "target", "params")},
+                             sort_keys=True, ensure_ascii=False) + json.dumps(costs, sort_keys=True)
+            if self.cache.get("key") != key:
+                planner = ActivationPlanner(EchoScorer(data["stats"], data["weights"]),
+                                            costs, data["target"], **data["params"])
+                self.cache.update(key=key, planner=planner)
+            if not self.cancelled.is_set():
+                result = self.cache["planner"].analyze(data["echo"])
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.signals.finished.emit(self.version, result, error)
+
+
 class EchoWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -57,8 +101,22 @@ class EchoWindow(QMainWindow):
         self.defaults = load_json(DEFAULT_WEIGHTS)
         EchoScorer(self.stats, self.defaults)
         self.updating = True
+        self._closing = False
+        self._strategy_version = 0
+        self._strategy_pending = None
+        self._strategy_task = None
+        self._strategy_cache: dict[str, Any] = {}
+        self._strategy_cancelled = Event()
+        self._strategy_pool = QThreadPool(self)
+        self._strategy_pool.setMaxThreadCount(1)
+        self._strategy_timer = QTimer(self)
+        self._strategy_timer.setSingleShot(True)
+        self._strategy_timer.setInterval(180)
+        self._strategy_timer.timeout.connect(self._start_strategy)
         self.weight_inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
-        self.sub_rows: list[tuple[QLabel, QComboBox, QComboBox]] = []
+        self.sub_stat_buttons: dict[str, QCheckBox] = {}
+        self.selected_sub_stats: list[str] = []
+        self.sub_tier_inputs: dict[str, QComboBox] = {}
         self.setWindowTitle("WWEcho · 声骸评分")
         self.resize(980, 940)
         self.setMinimumSize(760, 680)
@@ -82,7 +140,8 @@ class EchoWindow(QMainWindow):
         scroll.setWidget(canvas)
         self.setCentralWidget(scroll)
         self._refresh_main()
-        self._set_slot_count()
+        first_sub_stat = next(iter(self.stats["sub_stats"]["tiers"]))
+        self.sub_stat_buttons[first_sub_stat].setChecked(True)
         self.updating = False
         self.calculate()
 
@@ -138,46 +197,65 @@ class EchoWindow(QMainWindow):
 
     def _stats_panel(self) -> QGroupBox:
         group = QGroupBox("02  声骸词条与档位")
-        grid = QGridLayout(group)
+        layout = QVBoxLayout(group)
+        header = QGridLayout()
         self.cost = QComboBox()
         for cost in (1, 3, 4):
             self.cost.addItem(f"{cost} Cost", cost)
         self.cost.setCurrentIndex(2)
         self.main_stat = QComboBox()
         self.main_value = QLabel()
-        self.slot_count = QSpinBox()
-        self.slot_count.setRange(1, 5)
-        self.slot_count.setValue(1)
-        grid.addWidget(QLabel("Cost"), 0, 0)
-        grid.addWidget(self.cost, 0, 1)
-        grid.addWidget(QLabel("已激活副词条"), 0, 2)
-        grid.addWidget(self.slot_count, 0, 3)
-        grid.addWidget(QLabel("满级主词条"), 1, 0)
-        grid.addWidget(self.main_stat, 1, 1)
-        grid.addWidget(self.main_value, 1, 2, 1, 2)
-        for index in range(5):
-            label = QLabel(f"副词条 {index + 1}")
-            stat = QComboBox()
-            for stat_id in self.stats["sub_stats"]["tiers"]:
-                stat.addItem(self.stats["stat_definitions"][stat_id]["name_zh"], stat_id)
-            stat.setCurrentIndex(index)
+        self.selected_count = QLabel("0 / 5")
+        header.addWidget(QLabel("Cost"), 0, 0)
+        header.addWidget(self.cost, 0, 1)
+        header.addWidget(QLabel("已选副词条"), 0, 2)
+        header.addWidget(self.selected_count, 0, 3)
+        header.addWidget(QLabel("满级主词条"), 1, 0)
+        header.addWidget(self.main_stat, 1, 1)
+        header.addWidget(self.main_value, 1, 2, 1, 2)
+        layout.addLayout(header)
+
+        options = QGridLayout()
+        self.sub_options_layout = options
+        options.setHorizontalSpacing(8)
+        options.setVerticalSpacing(8)
+        for index, stat_id in enumerate(self.stats["sub_stats"]["tiers"]):
+            option = QWidget()
+            option_layout = QHBoxLayout(option)
+            option_layout.setContentsMargins(4, 2, 4, 2)
+            option_layout.setSpacing(6)
+            button = QCheckBox(self.stats["stat_definitions"][stat_id]["name_zh"])
+            button.setMinimumWidth(88)
+            button.toggled.connect(
+                lambda checked, selected_id=stat_id: self._toggle_sub_stat(selected_id, checked)
+            )
             tier = QComboBox()
-            self.sub_rows.append((label, stat, tier))
-            self._refresh_tiers(index)
-            stat.currentIndexChanged.connect(lambda _value, i=index: self._sub_changed(i))
-            tier.currentIndexChanged.connect(self.calculate)
-            grid.addWidget(label, index + 2, 0)
-            grid.addWidget(stat, index + 2, 1)
-            grid.addWidget(tier, index + 2, 2, 1, 2)
-        grid.setColumnStretch(1, 2)
-        grid.setColumnStretch(3, 1)
+            tier.setMinimumContentsLength(7)
+            tier.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            for rank, value in enumerate(self.stats["sub_stats"]["tiers"][stat_id]["values"], 1):
+                tier.addItem(f"{rank}档 · {self._format_value(stat_id, value)}", value)
+            tier.setEnabled(False)
+            tier.currentIndexChanged.connect(
+                lambda _index, selected_id=stat_id: self._sub_tier_changed(selected_id)
+            )
+            option_layout.addWidget(button, 1)
+            option_layout.addWidget(tier, 1)
+            self.sub_tier_inputs[stat_id] = tier
+            self.sub_stat_buttons[stat_id] = button
+            options.addWidget(option, index // 3, index % 3)
+        for column in range(3):
+            options.setColumnStretch(column, 1)
+        layout.addLayout(options)
+        self.clear_sub_stats_button = QPushButton("清空勾选")
+        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
+        layout.addWidget(self.clear_sub_stats_button, alignment=Qt.AlignmentFlag.AlignRight)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
-        self.slot_count.valueChanged.connect(self._set_slot_count)
-        hint = QLabel("副词条只能选择实际档位；重复类型会提示错误。未激活行不参与评分。")
+        hint = QLabel()
         hint.setObjectName("muted")
         hint.setWordWrap(True)
-        grid.addWidget(hint, 7, 0, 1, 4)
+        hint.setText("直接点击词条名选择，最多 5 项；每项档位可单独设置。再次点击可取消选择。")
+        layout.addWidget(hint)
         return group
 
     def _results_panel(self) -> QGroupBox:
@@ -194,6 +272,25 @@ class EchoWindow(QMainWindow):
         button.clicked.connect(self.calculate)
         toolbar.addWidget(button)
         layout.addLayout(toolbar)
+        parameters = QGridLayout()
+        self.strategy_inputs: dict[str, QDoubleSpinBox] = {}
+        for index, (name, text, default, maximum) in enumerate([
+            ("recovery", "失败经验回收系数", .66, 1),
+            ("tuning_weight", "调谐权重", 1, 1_000_000),
+            ("experience_weight", "经验权重", 1, 1_000_000),
+            ("embryo_weight", "胚子权重", 1, 1_000_000),
+            ("threshold", "赌词条阈值", 20, 100),
+        ]):
+            box = self._number(default, manual_only=True)
+            box.setMaximum(maximum)
+            if name == "threshold":
+                box.setSuffix(" %")
+            box.valueChanged.connect(self.calculate)
+            self.strategy_inputs[name] = box
+            row_index, column = divmod(index, 2)
+            parameters.addWidget(QLabel(text), row_index, column * 2)
+            parameters.addWidget(box, row_index, column * 2 + 1)
+        layout.addLayout(parameters)
         row = QHBoxLayout()
         self.score_label = QLabel("—")
         self.score_label.setObjectName("score")
@@ -214,10 +311,29 @@ class EchoWindow(QMainWindow):
         self.details.setMinimumHeight(170)
         self.details.setMaximumHeight(210)
         layout.addWidget(self.details)
-        hint = QLabel("目标只用于当前得分比较；不计算后续调谐概率或材料成本。分数不是伤害提升百分比。")
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.strategy_status = QLabel("策略等待计算")
+        self.strategy_status.setWordWrap(True)
+        self.strategy_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.strategy_status)
+        self.zero_strategy = QLabel("—")
+        self.current_strategy = QLabel("—")
+        for title, label in [("从零激活 · 反复尝试至成功", self.zero_strategy),
+                             ("当前词条 · 是否继续", self.current_strategy)]:
+            panel = QGroupBox(title)
+            panel_layout = QVBoxLayout(panel)
+            label.setWordWrap(True)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            panel_layout.addWidget(label)
+            layout.addWidget(panel)
+        self.result_hint = QLabel(
+            "分数网格近似：完整激活概率区间与阈值策略成功率（近似）不是同一指标。"
+            "当前推荐依据完整激活概率下界与赌词条阈值，不是成本最优。"
+            "材料成本为占位；回收仅作用于失败经验，调谐和胚子无回收。"
+            "从零成本包含反复尝试至成功的总加权净成本；胚子期望为 1/p。"
+            "分数不是伤害提升百分比。")
+        self.result_hint.setObjectName("muted")
+        self.result_hint.setWordWrap(True)
+        layout.addWidget(self.result_hint)
         return group
 
     def _format_value(self, stat_id: str, value: float) -> str:
@@ -242,23 +358,42 @@ class EchoWindow(QMainWindow):
         self.main_value.setText(f"+25 满级值：{self._format_value(stat_id, value)}")
         self.calculate()
 
-    def _refresh_tiers(self, index: int) -> None:
-        _, stat, tier = self.sub_rows[index]
-        stat_id = stat.currentData()
-        tier.blockSignals(True)
-        tier.clear()
-        for rank, value in enumerate(self.stats["sub_stats"]["tiers"][stat_id]["values"], 1):
-            tier.addItem(f"第 {rank} 档 · {self._format_value(stat_id, value)}", value)
-        tier.blockSignals(False)
-
-    def _sub_changed(self, index: int) -> None:
-        self._refresh_tiers(index)
+    def _toggle_sub_stat(self, stat_id: str, checked: bool) -> None:
+        if checked:
+            if len(self.selected_sub_stats) >= 5:
+                button = self.sub_stat_buttons[stat_id]
+                button.blockSignals(True)
+                button.setChecked(False)
+                button.blockSignals(False)
+                self.statusBar().showMessage("最多选择 5 个副词条", 3000)
+                return
+            self.selected_sub_stats.append(stat_id)
+            self.sub_tier_inputs[stat_id].setEnabled(True)
+            self.selected_count.setText(f"{len(self.selected_sub_stats)} / 5")
+            if not self.updating:
+                QTimer.singleShot(0, self.sub_tier_inputs[stat_id].showPopup)
+        else:
+            if stat_id in self.selected_sub_stats:
+                self.selected_sub_stats.remove(stat_id)
+            self.sub_tier_inputs[stat_id].setEnabled(False)
+            self.selected_count.setText(f"{len(self.selected_sub_stats)} / 5")
         self.calculate()
 
-    def _set_slot_count(self) -> None:
-        for index, row in enumerate(self.sub_rows):
-            for widget in row:
-                widget.setEnabled(index < self.slot_count.value())
+    def _sub_tier_changed(self, stat_id: str) -> None:
+        if self.updating:
+            return
+        if stat_id in self.selected_sub_stats:
+            self.calculate()
+
+    def clear_sub_stats(self) -> None:
+        for button in self.sub_stat_buttons.values():
+            button.blockSignals(True)
+            button.setChecked(False)
+            button.blockSignals(False)
+        for tier in self.sub_tier_inputs.values():
+            tier.setEnabled(False)
+        self.selected_sub_stats.clear()
+        self.selected_count.setText("0 / 5")
         self.calculate()
 
     def current_weights(self) -> dict[str, Any]:
@@ -271,12 +406,18 @@ class EchoWindow(QMainWindow):
         main = self.main_stat.currentData()
         return {"cost": cost,
                 "main_stat": {"name": main, "value": self.stats["main_stats"]["max_values_by_cost"][str(cost)][main]},
-                "sub_stats": [{"name": stat.currentData(), "value": tier.currentData()}
-                              for _, stat, tier in self.sub_rows[:self.slot_count.value()]]}
+                "sub_stats": [{"name": stat_id, "value": self.sub_tier_inputs[stat_id].currentData()}
+                              for stat_id in self.selected_sub_stats]}
 
     def calculate(self) -> None:
-        if self.updating:
+        if self.updating or self._closing:
             return
+        # 所有输入变化（包括无效输入）立即使旧版本失效。
+        self._strategy_version += 1
+        self._strategy_pending = None
+        self._strategy_timer.stop()
+        self.zero_strategy.setText("—")
+        self.current_strategy.setText("—")
         try:
             result = EchoScorer(self.stats, self.current_weights()).score(self.current_echo())
         except ValueError as exc:
@@ -284,6 +425,7 @@ class EchoWindow(QMainWindow):
             self.summary.setText(f"输入有误：{exc}")
             self.details.setRowCount(0)
             self.progress.setValue(0)
+            self.strategy_status.setText("策略输入无效")
             return
         score, target = result["score"], self.target.value()
         self.score_label.setText(f"{score:g} 分")
@@ -298,6 +440,83 @@ class EchoWindow(QMainWindow):
                       f"{item['weight']:g}", f"{item['score']:g}"]
             for col, value in enumerate(values):
                 self.details.setItem(row, col, QTableWidgetItem(value))
+        params = {name: box.value() for name, box in self.strategy_inputs.items()}
+        params["threshold"] /= 100
+        params["bins"] = 1000
+        self._strategy_pending = (self._strategy_version, deepcopy({
+            "stats": self.stats, "weights": self.current_weights(),
+            "target": target, "params": params, "echo": self.current_echo(),
+        }))
+        self.strategy_status.setText("策略等待后台计算（评分已更新）")
+        self._strategy_timer.start()
+
+    @Slot()
+    def _start_strategy(self) -> None:
+        if self._closing or self._strategy_task is not None or self._strategy_pending is None:
+            return
+        version, snapshot = self._strategy_pending
+        self._strategy_pending = None
+        task = StrategyTask(version, snapshot, self._strategy_cache, self._strategy_cancelled)
+        task.signals.finished.connect(self._strategy_finished, Qt.ConnectionType.QueuedConnection)
+        self._strategy_task = task
+        self.strategy_status.setText("策略后台计算中（评分仍可编辑）")
+        self._strategy_pool.start(task)
+
+    @Slot(int, object, str)
+    def _strategy_finished(self, version: int, result: Any, error: str) -> None:
+        if self._closing:
+            return
+        self._strategy_task = None
+        if version == self._strategy_version:
+            if error:
+                self.strategy_status.setText(f"策略计算失败（不影响评分）：{error}")
+            elif result is not None:
+                try:
+                    self._display_strategy(result)
+                except (KeyError, TypeError, ValueError) as exc:
+                    self.strategy_status.setText(f"策略结果格式有误：{exc}")
+        # 防抖已到期则消费最新快照；否则继续等定时器，不排队旧输入。
+        if self._strategy_pending is not None and not self._strategy_timer.isActive():
+            self._start_strategy()
+
+    def _display_strategy(self, result: dict[str, Any]) -> None:
+        def interval(item: dict[str, Any]) -> str:
+            return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
+                    f"{item['full_success_upper']:.2%}\n"
+                    f"阈值策略成功率（近似）：{item['success_probability']:.2%}")
+
+        def amount(value: Any) -> str:
+            return "无法获得 / ∞" if value is None else f"{value:,.4g}"
+
+        zero, current = result["zero"], result["current"]
+        zero_text = (interval(zero) + f"\n单次尝试加权净成本：{amount(zero['attempt_cost'])}"
+                     f"\n成功期望总加权净成本：{amount(zero['expected_cost'])}"
+                     f"\n期望胚子：{amount(zero['expected_embryos'])}"
+                     f" · 调谐：{amount(zero['expected_tuning'])}"
+                     f" · 净经验：{amount(zero['expected_experience'])}")
+        recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
+        current_text = (interval(current) + f"\n{recommendation}（基于下界阈值，非成本最优）"
+                        f"\n原因：{current['reason']}"
+                        f"\n后续加权净成本：{amount(current['future_cost'])}")
+        status = f"策略已更新 · 分数网格近似步长 {result['score_resolution']:g} · {result['method']}"
+        self.zero_strategy.setText(zero_text)
+        self.current_strategy.setText(current_text)
+        self.strategy_status.setText(status)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._closing = True
+        self._strategy_version += 1
+        self._strategy_timer.stop()
+        self._strategy_pending = None
+        self._strategy_cancelled.set()
+        if self._strategy_task is not None:
+            self._strategy_task.signals.finished.disconnect(self._strategy_finished)
+        # analyze 无中断 API，关闭时等待唯一在途任务退出，不强杀线程。
+        # 控件销毁前回收线程池，排队结果仍由 _closing 拒绝。
+        self._strategy_pool.waitForDone()
+        self._strategy_task = None
+        self._strategy_cache.clear()
+        super().closeEvent(event)
 
     def apply_weights(self, weights: dict[str, Any]) -> None:
         EchoScorer(self.stats, weights)

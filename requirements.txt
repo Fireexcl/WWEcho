@@ -1,1 +1,2 @@
 PySide6-Essentials>=6.6,<6.11
+numpy>=1.24,<2.1

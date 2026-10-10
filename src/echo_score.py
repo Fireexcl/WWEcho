@@ -101,7 +101,7 @@ class EchoScorer:
     def score(self, echo: dict[str, Any]) -> dict[str, Any]:
         """输入 main_stat、sub_stats，可选 cost；返回总分及贡献明细。
 
-        百分比值使用百分点（22 表示 22%）。主词条必须是五星 +25
+        百分比值使用百分点（22 表示 22%）。支持 0～5 条副词条。主词条必须是五星 +25
         满级值，副词条必须匹配配置中的实际档位。未激活槽位不计分。
         """
         if not isinstance(echo, dict):
@@ -123,8 +123,8 @@ class EchoScorer:
         main = self._contribution("main_stats", main_id, references[0], references[0])
         entries = echo["sub_stats"]
         max_count = self.stats["sub_stats"]["max_count"]
-        if not isinstance(entries, list) or not 1 <= len(entries) <= max_count:
-            raise ValueError(f"已激活副词条必须为 1～{max_count} 条")
+        if not isinstance(entries, list) or not 0 <= len(entries) <= max_count:
+            raise ValueError(f"已激活副词条必须为 0～{max_count} 条")
         seen: set[str] = set()
         subs = []
         raw_sub_scores = []
@@ -161,7 +161,7 @@ class EchoScorer:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="五星 +25 声骸：主词条 + 1～5 副词条评分")
+    parser = argparse.ArgumentParser(description="五星 +25 声骸：主词条 + 0～5 副词条评分")
     parser.add_argument("input", nargs="?", type=Path, help="输入 JSON 文件；省略时从标准输入读取")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="用户权重 JSON")
     parser.add_argument("--stats", type=Path, default=DEFAULT_STATS, help="属性数据 JSON")

@@ -1,0 +1,38 @@
+{
+    "schema_version": 1,
+    "status": "placeholder",
+    "description": "非实际游戏消耗。每行是解锁并激活下一槽的增量成本；失败仅返还累计经验乘回收系数，调谐器和胚子不返还。",
+    "embryo_cost": 1,
+    "steps": [
+        {
+            "slot": 1,
+            "unlock_level": 5,
+            "tuning": 1,
+            "experience": 1
+        },
+        {
+            "slot": 2,
+            "unlock_level": 10,
+            "tuning": 1,
+            "experience": 1
+        },
+        {
+            "slot": 3,
+            "unlock_level": 15,
+            "tuning": 1,
+            "experience": 1
+        },
+        {
+            "slot": 4,
+            "unlock_level": 20,
+            "tuning": 1,
+            "experience": 1
+        },
+        {
+            "slot": 5,
+            "unlock_level": 25,
+            "tuning": 1,
+            "experience": 1
+        }
+    ]
+}

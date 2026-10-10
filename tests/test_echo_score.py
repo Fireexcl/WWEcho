@@ -20,6 +20,7 @@ class EchoScorerTests(unittest.TestCase):
         self.assertEqual(result["sub_score"], 70)
 
     def test_one_to_five_slots_accumulate(self):
+        self.assertEqual(self.scorer.score(dict(self.echo, sub_stats=[]))["score"], 20)
         for count, expected in enumerate([40, 60, 70, 80, 90], 1):
             with self.subTest(count=count):
                 echo = dict(self.echo, sub_stats=self.echo["sub_stats"][:count])
@@ -54,7 +55,7 @@ class EchoScorerTests(unittest.TestCase):
     def test_invalid_inputs(self):
         invalid = [
             {}, [],
-            dict(self.echo, sub_stats=[]),
+            dict(self.echo, sub_stats=None),
             dict(self.echo, sub_stats=self.echo["sub_stats"] + [{"name": "固定攻击", "value": 30}]),
             dict(self.echo, sub_stats=[{"name": "crit_rate", "value": 10.5},
                                       {"name": "暴击率", "value": 6.3}]),
