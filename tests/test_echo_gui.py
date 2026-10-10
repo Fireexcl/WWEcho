@@ -6,7 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import copy
 import unittest
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QTabWidget
 from src.echo_gui import EchoWindow
 
 
@@ -47,6 +50,52 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.score_label.text(), "100 分")
         self.window.restore_weights()
         self.assertEqual(self.window.score_label.text(), "90 分")
+
+    def test_weight_tab_order_and_layout(self):
+        tabs = self.window.findChild(QTabWidget)
+        self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
+                         ["副词条权重", "主词条权重"])
+        self.assertEqual(tabs.currentIndex(), 0)
+        for tab_index, category, pairs in [(0, "sub_stats", 2), (1, "main_stats", 2)]:
+            table = tabs.widget(tab_index)
+            inputs = self.window.weight_inputs[category]
+            self.assertEqual(table.columnCount(), pairs * 2)
+            self.assertEqual(table.rowCount(), (len(inputs) + pairs - 1) // pairs)
+            self.assertTrue(table.horizontalHeader().isHidden())
+            self.assertEqual(table.verticalScrollBar().maximum(), 0)
+            self.assertGreaterEqual(table.height(), table.rowCount() * 40)
+            for index, (stat_id, box) in enumerate(inputs.items()):
+                row, pair = divmod(index, pairs)
+                self.assertEqual(table.item(row, pair * 2).text(),
+                                 self.window.stats["stat_definitions"][stat_id]["name_zh"])
+                self.assertIs(table.cellWidget(row, pair * 2 + 1), box)
+            if len(inputs) % pairs:
+                self.assertIsNone(table.cellWidget(table.rowCount() - 1, 3))
+
+    def test_weights_disable_stepping_but_allow_manual_input(self):
+        self.choose_example()
+        for inputs in self.window.weight_inputs.values():
+            for box in inputs.values():
+                self.assertEqual(box.buttonSymbols(), QDoubleSpinBox.ButtonSymbols.NoButtons)
+                original = box.value()
+                box.stepUp()
+                box.stepDown()
+                for key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown):
+                    QTest.keyClick(box, key)
+                wheel = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(), QPoint(0, 120),
+                                    Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                    Qt.ScrollPhase.NoScrollPhase, False)
+                QApplication.sendEvent(box, wheel)
+                self.assertEqual(box.value(), original)
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        box.setFocus()
+        box.selectAll()
+        QTest.keyClicks(box, "30.1256")
+        QTest.keyClick(box, Qt.Key.Key_Return)
+        self.assertEqual(box.value(), 30.1256)
+        self.assertEqual(self.window.score_label.text(), "100.126 分")
+        self.window.target.stepUp()
+        self.assertEqual(self.window.target.value(), 81)
 
     def test_cost_refreshes_main_and_disables_slots(self):
         self.choose_example()

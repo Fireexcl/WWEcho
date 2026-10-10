@@ -4,9 +4,9 @@
 		{
 			"label": "启动声骸评分 GUI",
 			"type": "shell",
-			"command": "\"${command:python.interpreterPath}\"",
+			"command": "bash",
 			"args": [
-				"echo_gui.py"
+				"${workspaceFolder}/run.sh"
 			],
 			"isBackground": true,
 			"problemMatcher": []

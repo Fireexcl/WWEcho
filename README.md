@@ -1,16 +1,18 @@
 # 声骸评分原型
 
-评分核心使用 Python 标准库，无第三方运行依赖；独立窗口使用 PySide6，依赖见 [requirements.txt](requirements.txt)。当前代码兼容 Python 3.9+；新环境建议使用 Python 3.12。计算入口在 [echo_score.py](echo_score.py)，窗口入口在 [echo_gui.py](echo_gui.py)。
+评分核心使用 Python 标准库，无第三方运行依赖；独立窗口使用 PySide6，依赖见 [requirements.txt](requirements.txt)。当前代码兼容 Python 3.9+；新环境建议使用 Python 3.12。计算入口在 [src/echo_score.py](src/echo_score.py)，窗口入口在 [src/echo_gui.py](src/echo_gui.py)。
 
 ## 独立窗口 GUI
 
-安装 GUI 依赖后使用 Python 启动 [echo_gui.py](echo_gui.py)，或在 VS Code 运行“启动声骸评分 GUI”任务。窗口分为三个区域：
+在项目的 `.venv` 虚拟环境安装 GUI 依赖后，在终端执行 `./run.sh`，或在 VS Code 运行“启动声骸评分 GUI”任务（同样调用 [run.sh](run.sh)）。脚本自动定位项目目录并使用虚拟环境的 Python，不需要手动激活环境；从其他目录也可通过脚本的绝对路径启动。脚本内部使用 `-m src.echo_gui` 按模块运行，确保项目内的导入正常。窗口分为三个区域：
 
 1. **上方权重配置**：主、副词条权重分标签页展示，可以直接编辑、导入/导出 JSON 预设、恢复默认占位权重。支持 0～1000000 的权重和最多四位小数。修改不会自动覆盖内置配置；需要保留时请导出，下次打开后导入。
 2. **中间词条选择**：选择 1/3/4 Cost，主词条候选随 Cost 更新并显示 +25 满级值；选择已激活副词条数量（1～5），每行选择词条及合法数值档位。未激活行禁用；重复类型提示错误并清除旧结果。
 3. **下方目标与结果**：设置目标分数，显示当前总分、主副词条分项、距目标差值、目标完成进度及贡献明细。所有输入修改后实时计算，也可点击计算按钮。
 
 目标仅用于比较当前得分，不代表后续成功概率。此版不计算调谐成本或继续建议。独立窗口支持 macOS/Windows；尚未打包为 Windows EXE。
+
+后续“是否继续激活下一词条”的算法方案见 [激活推荐算法讨论](docs/activation-recommendation-algorithms.md)，涵盖可达性、达标概率、个人阈值与成本感知最优停止；当前尚未实现。
 
 界面仅依赖 PySide6 的 Essentials（Qt Widgets/Core/Gui），不安装此版未使用的大型 Addons 模块。
 

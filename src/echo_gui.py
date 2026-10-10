@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
@@ -40,6 +41,13 @@ QHeaderView::section { background: #f1f5fb; border: none; padding: 7px; }
 QProgressBar { border: none; background: #e8eef8; border-radius: 5px; height: 10px; }
 QProgressBar::chunk { background: #2563eb; border-radius: 5px; }
 """
+
+
+class ManualWeightInput(QDoubleSpinBox):
+    """保留数值校验与手动编辑，禁用按键和滚轮步进。"""
+
+    def stepBy(self, steps: int) -> None:
+        pass
 
 
 class EchoWindow(QMainWindow):
@@ -78,8 +86,10 @@ class EchoWindow(QMainWindow):
         self.updating = False
         self.calculate()
 
-    def _number(self, value: float = 0) -> QDoubleSpinBox:
-        box = QDoubleSpinBox()
+    def _number(self, value: float = 0, *, manual_only: bool = False) -> QDoubleSpinBox:
+        box = ManualWeightInput() if manual_only else QDoubleSpinBox()
+        if manual_only:
+            box.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         box.setRange(0, 1_000_000)
         box.setDecimals(4)
         box.setSingleStep(1)
@@ -101,22 +111,26 @@ class EchoWindow(QMainWindow):
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
         tabs = QTabWidget()
-        for category, title in [("main_stats", "主词条权重"), ("sub_stats", "副词条权重")]:
+        for category, title in [("sub_stats", "副词条权重"), ("main_stats", "主词条权重")]:
             values = self.defaults[category]
-            table = QTableWidget(len(values), 2)
-            table.setHorizontalHeaderLabels(["词条", "参考满档分值"])
+            pairs_per_row = 2
+            row_count = (len(values) + pairs_per_row - 1) // pairs_per_row
+            table = QTableWidget(row_count, pairs_per_row * 2)
+            table.horizontalHeader().hide()
             table.verticalHeader().hide()
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            table.setMinimumHeight(170)
-            table.setMaximumHeight(200)
+            table.setFixedHeight(row_count * 40 + 12)
             self.weight_inputs[category] = {}
-            for row, (stat_id, value) in enumerate(values.items()):
-                table.setItem(row, 0, QTableWidgetItem(self.stats["stat_definitions"][stat_id]["name_zh"]))
-                box = self._number(value)
+            for index, (stat_id, value) in enumerate(values.items()):
+                row, pair = divmod(index, pairs_per_row)
+                column = pair * 2
+                table.setItem(row, column, QTableWidgetItem(self.stats["stat_definitions"][stat_id]["name_zh"]))
+                box = self._number(value, manual_only=True)
                 box.valueChanged.connect(self.calculate)
-                table.setCellWidget(row, 1, box)
-                table.setRowHeight(row, 38)
+                table.setCellWidget(row, column + 1, box)
+                table.setRowHeight(row, 40)
                 self.weight_inputs[category][stat_id] = box
             tabs.addTab(table, title)
         layout.addWidget(tabs)

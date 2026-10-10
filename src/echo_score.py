@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATS = ROOT / "config" / "echo-stats.json"
 DEFAULT_WEIGHTS = ROOT / "config" / "score-weights.json"
 
