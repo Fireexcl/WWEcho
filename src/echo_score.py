@@ -49,12 +49,27 @@ class EchoScorer:
         self.tiers = stats["sub_stats"]["tiers"]
         self.names = {definition["name_zh"]: stat_id
                       for stat_id, definition in self.definitions.items()}
-        self.weights: dict[str, dict[str, float]] = {}
+        self.weights: dict[str, Any] = {}
+        main_values = weights.get("main_stats")
+        by_cost = isinstance(main_values, dict) and set(main_values) == set(self.main_by_cost)
         for category, expected in (
             ("main_stats", set().union(*(set(pool) for pool in self.main_by_cost.values()))),
             ("sub_stats", set(self.tiers)),
         ):
             values = weights.get(category)
+            if category == "main_stats" and by_cost:
+                self.weights[category] = {}
+                for cost, pool in self.main_by_cost.items():
+                    cost_values = values[cost]
+                    if not isinstance(cost_values, dict) or set(cost_values) != set(pool):
+                        raise ValueError(f"主词条权重 Cost {cost} 必须完整且仅包含该 Cost 的候选词条")
+                    self.weights[category][cost] = {}
+                    for stat_id, value in cost_values.items():
+                        weight = finite_number(value, f"main_stats.{cost}.{stat_id} 权重")
+                        if weight < 0:
+                            raise ValueError("权重不能为负数；无效属性请设为 0")
+                        self.weights[category][cost][stat_id] = weight
+                continue
             if not isinstance(values, dict) or set(values) != expected:
                 raise ValueError(f"权重配置 {category} 必须完整且仅包含该分类的词条标识")
             self.weights[category] = {}
@@ -64,8 +79,11 @@ class EchoScorer:
                     raise ValueError("权重不能为负数；无效属性请设为 0")
                 self.weights[category][stat_id] = weight
 
-        main_max = max(value * self.weights["main_stats"][stat_id]
-                       for pool in self.main_by_cost.values()
+        self.main_weights_by_cost = (self.weights["main_stats"] if by_cost else {
+            cost: {stat_id: self.weights["main_stats"][stat_id] for stat_id in pool}
+            for cost, pool in self.main_by_cost.items()})
+        main_max = max(value * self.main_weights_by_cost[cost][stat_id]
+                       for cost, pool in self.main_by_cost.items()
                        for stat_id, value in pool.items())
         sub_maxima = sorted((max(tier["values"]) * self.weights["sub_stats"][stat_id]
                              for stat_id, tier in self.tiers.items()), reverse=True)
@@ -78,12 +96,28 @@ class EchoScorer:
             raise ValueError("权重过大，评分超出有限数值范围")
         self.aligned_max_score = ALIGNMENT_SCORE if self.unaligned_max_score > 0 else 0.0
 
-    def stat_score(self, category: str, stat_id: str, value: float) -> float:
+    def stat_score(self, category: str, stat_id: str, value: float,
+                   cost: Optional[int] = None) -> float:
         """返回未圆整贡献；评分明细和策略计算共用同一公式。"""
         if self.unaligned_max_score == 0:
             return 0.0
-        return (value * self.weights[category][stat_id] / self.unaligned_max_score
+        weight = self.stat_weight(category, stat_id, value, cost)
+        return (value * weight / self.unaligned_max_score
                 * ALIGNMENT_SCORE)
+
+    def stat_weight(self, category: str, stat_id: str, value: float,
+                    cost: Optional[int] = None) -> float:
+        if category != "main_stats":
+            return self.weights[category][stat_id]
+        candidates = [key for key, pool in self.main_by_cost.items()
+                      if (cost is None or key == str(cost)) and stat_id in pool
+                      and self._matches(value, pool[stat_id])]
+        if not candidates:
+            raise ValueError("主词条类型或数值不符合指定 Cost 的满级值")
+        weights = {self.main_weights_by_cost[key][stat_id] for key in candidates}
+        if len(weights) != 1:
+            raise ValueError("主词条匹配多个 Cost 且权重不同，请提供 cost")
+        return weights.pop()
 
     @classmethod
     def from_files(cls, stats_path: Path = DEFAULT_STATS,
@@ -107,8 +141,8 @@ class EchoScorer:
         return math.isclose(value, reference, rel_tol=0, abs_tol=1e-8)
 
     def _contribution(self, category: str, stat_id: str, value: float,
-                      reference: float) -> dict[str, Any]:
-        weight = self.weights[category][stat_id]
+                      reference: float, cost: Optional[int] = None) -> dict[str, Any]:
+        weight = self.stat_weight(category, stat_id, value, cost)
         ratio = value / reference
         return {
             "stat_id": stat_id,
@@ -117,7 +151,7 @@ class EchoScorer:
             "reference_value": reference,
             "weight": weight,
             "ratio": round(ratio, 8),
-            "score": round(self.stat_score(category, stat_id, value), 6),
+            "score": round(self.stat_score(category, stat_id, value, cost), 6),
         }
 
     def score(self, echo: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +176,7 @@ class EchoScorer:
                       and self._matches(main_value, pool[main_id])]
         if not references:
             raise ValueError("主词条类型或数值不符合指定 Cost（或任一 Cost）的五星 +25 满级值")
-        main = self._contribution("main_stats", main_id, references[0], references[0])
+        main = self._contribution("main_stats", main_id, references[0], references[0], cost)
         entries = echo["sub_stats"]
         max_count = self.stats["sub_stats"]["max_count"]
         if not isinstance(entries, list) or not 0 <= len(entries) <= max_count:
@@ -164,7 +198,7 @@ class EchoScorer:
             reference = max(values)
             subs.append(self._contribution("sub_stats", stat_id, matched, reference))
             raw_sub_scores.append(self.stat_score("sub_stats", stat_id, matched))
-        main_score = self.stat_score("main_stats", main_id, references[0])
+        main_score = self.stat_score("main_stats", main_id, references[0], cost)
         try:
             sub_score = math.fsum(raw_sub_scores)
             total = math.fsum([main_score, sub_score])

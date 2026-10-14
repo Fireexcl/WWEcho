@@ -2,19 +2,31 @@
     "schema_version": 1,
     "description": "自定义权重，非官方评分或角色伤害收益。每个权重表示该分类每单位词条数值的系数；数值乘权重后以全局理论最高原始分对齐到 50 分，可设 0。",
     "main_stats": {
-        "hp_pct": 20,
-        "atk_pct": 20,
-        "def_pct": 20,
-        "crit_rate": 20,
-        "crit_dmg": 20,
-        "energy_regen": 20,
-        "aero_dmg_bonus": 20,
-        "glacio_dmg_bonus": 20,
-        "fusion_dmg_bonus": 20,
-        "electro_dmg_bonus": 20,
-        "havoc_dmg_bonus": 20,
-        "spectro_dmg_bonus": 20,
-        "healing_bonus": 20
+        "1": {
+            "hp_pct": 20,
+            "atk_pct": 20,
+            "def_pct": 20
+        },
+        "3": {
+            "hp_pct": 20,
+            "atk_pct": 20,
+            "def_pct": 20,
+            "energy_regen": 20,
+            "aero_dmg_bonus": 20,
+            "glacio_dmg_bonus": 20,
+            "fusion_dmg_bonus": 20,
+            "electro_dmg_bonus": 20,
+            "havoc_dmg_bonus": 20,
+            "spectro_dmg_bonus": 20
+        },
+        "4": {
+            "hp_pct": 20,
+            "atk_pct": 20,
+            "def_pct": 20,
+            "crit_rate": 20,
+            "crit_dmg": 20,
+            "healing_bonus": 20
+        }
     },
     "sub_stats": {
         "hp_flat": 0,

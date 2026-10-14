@@ -99,7 +99,8 @@ class EchoWindow(QMainWindow):
         super().__init__()
         self.stats = load_json(DEFAULT_STATS)
         self.defaults = load_json(DEFAULT_WEIGHTS)
-        EchoScorer(self.stats, self.defaults)
+        default_scorer = EchoScorer(self.stats, self.defaults)
+        self.defaults["main_stats"] = deepcopy(default_scorer.main_weights_by_cost)
         self.updating = True
         self._closing = False
         self._strategy_version = 0
@@ -170,8 +171,11 @@ class EchoWindow(QMainWindow):
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
         tabs = QTabWidget()
-        for category, title in [("sub_stats", "副词条权重"), ("main_stats", "主词条权重")]:
-            values = self.defaults[category]
+        self.weight_tabs = tabs
+        groups = [("sub_stats", "副词条权重", self.defaults["sub_stats"])] + [
+            (f"main_stats_{cost}", f"Cost {cost} 主词条权重", self.defaults["main_stats"][cost])
+            for cost in ("1", "3", "4")]
+        for category, title, values in groups:
             pairs_per_row = 2
             row_count = (len(values) + pairs_per_row - 1) // pairs_per_row
             table = QTableWidget(row_count, pairs_per_row * 2)
@@ -351,13 +355,13 @@ class EchoWindow(QMainWindow):
         return f"{value:g}{suffix}"
 
     def _refresh_main(self) -> None:
-        previous = self.main_stat.currentData()
         self.main_stat.blockSignals(True)
         self.main_stat.clear()
         pool = self.stats["main_stats"]["max_values_by_cost"][str(self.cost.currentData())]
         for stat_id in pool:
             self.main_stat.addItem(self.stats["stat_definitions"][stat_id]["name_zh"], stat_id)
-        index = self.main_stat.findData(previous)
+        default = "crit_rate" if self.cost.currentData() == 4 else "atk_pct"
+        index = self.main_stat.findData(default)
         self.main_stat.setCurrentIndex(max(0, index))
         self.main_stat.blockSignals(False)
         self._main_changed()
@@ -408,8 +412,10 @@ class EchoWindow(QMainWindow):
 
     def current_weights(self) -> dict[str, Any]:
         return {"schema_version": 1, "description": "GUI 用户手动权重",
-                **{category: {stat_id: box.value() for stat_id, box in inputs.items()}
-                   for category, inputs in self.weight_inputs.items()}}
+                "sub_stats": {stat_id: box.value() for stat_id, box in self.weight_inputs["sub_stats"].items()},
+                "main_stats": {cost: {stat_id: box.value() for stat_id, box in
+                                      self.weight_inputs[f"main_stats_{cost}"].items()}
+                               for cost in ("1", "3", "4")}}
 
     def current_echo(self) -> dict[str, Any]:
         cost = self.cost.currentData()
@@ -535,17 +541,19 @@ class EchoWindow(QMainWindow):
         super().closeEvent(event)
 
     def apply_weights(self, weights: dict[str, Any]) -> None:
-        EchoScorer(self.stats, weights)
+        scorer = EchoScorer(self.stats, weights)
+        values = {"sub_stats": scorer.weights["sub_stats"],
+                  **{f"main_stats_{cost}": pool for cost, pool in scorer.main_weights_by_cost.items()}}
         for category, inputs in self.weight_inputs.items():
             for stat_id, box in inputs.items():
-                value = weights[category][stat_id]
+                value = values[category][stat_id]
                 if value > box.maximum() or abs(round(value, box.decimals()) - value) > 1e-8:
                     raise ValueError("GUI 权重支持 0～1000000，最多四位小数；未导入任何权重")
         self.updating = True
         try:
             for category, inputs in self.weight_inputs.items():
                 for stat_id, box in inputs.items():
-                    box.setValue(weights[category][stat_id])
+                    box.setValue(values[category][stat_id])
         finally:
             self.updating = False
         self.calculate()

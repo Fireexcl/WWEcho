@@ -10,9 +10,10 @@ class StrategyTests(unittest.TestCase):
         self.stats = load_json(DEFAULT_STATS)
         self.weights = load_json(DEFAULT_WEIGHTS)
         # 独立于用户默认预设，构造原始满档贡献 20 + 70 的固定测试场景。
-        for category in ("main_stats", "sub_stats"):
-            self.weights[category] = dict.fromkeys(self.weights[category], 0)
-        self.weights["main_stats"]["crit_rate"] = 20 / 22
+        self.weights["sub_stats"] = dict.fromkeys(self.weights["sub_stats"], 0)
+        for cost, pool in self.weights["main_stats"].items():
+            self.weights["main_stats"][cost] = dict.fromkeys(pool, 0)
+        self.weights["main_stats"]["4"]["crit_rate"] = 20 / 22
         for name, contribution in [("crit_rate", 20), ("crit_dmg", 20), ("atk_pct", 10),
                                    ("energy_regen", 10), ("basic_atk_dmg_bonus", 10), ("atk_flat", 5)]:
             self.weights["sub_stats"][name] = contribution / max(self.stats["sub_stats"]["tiers"][name]["values"])

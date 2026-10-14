@@ -17,8 +17,8 @@ class EchoScorerTests(unittest.TestCase):
 
     def raw_maximum(self, weights=None):
         weights = self.weights if weights is None else weights
-        main = max(value * weights["main_stats"][name]
-                   for pool in self.stats["main_stats"]["max_values_by_cost"].values()
+        main = max(value * weights["main_stats"][cost][name]
+               for cost, pool in self.stats["main_stats"]["max_values_by_cost"].items()
                    for name, value in pool.items())
         subs = sorted((max(tier["values"]) * weights["sub_stats"][name]
                        for name, tier in self.stats["sub_stats"]["tiers"].items()), reverse=True)
@@ -30,7 +30,14 @@ class EchoScorerTests(unittest.TestCase):
         names = {data["name_zh"]: name for name, data in self.stats["stat_definitions"].items()}
         def contribution(category, entry):
             name = names.get(entry["name"], entry["name"])
-            return entry["value"] * weights[category][name] / maximum * 50 if maximum else 0
+            if category == "main_stats":
+                cost = str(echo["cost"]) if "cost" in echo else next(
+                    cost for cost, pool in self.stats["main_stats"]["max_values_by_cost"].items()
+                    if pool.get(name) == entry["value"])
+                weight = weights[category][cost][name]
+            else:
+                weight = weights[category][name]
+            return entry["value"] * weight / maximum * 50 if maximum else 0
         main_score = contribution("main_stats", echo["main_stat"])
         sub_score = math.fsum(contribution("sub_stats", item) for item in echo["sub_stats"])
         return round(main_score + sub_score, 6), round(main_score, 6), round(sub_score, 6)
@@ -40,6 +47,18 @@ class EchoScorerTests(unittest.TestCase):
         expected = self.expected_scores(self.echo)
         self.assertEqual((result["score"], result["main_score"], result["sub_score"]), expected)
         self.assertEqual(self.scorer.unaligned_max_score, self.raw_maximum())
+
+    def test_default_config_has_separate_cost_weights(self):
+        self.assertEqual(set(self.weights["main_stats"]), {"1", "3", "4"})
+        for cost, pool in self.stats["main_stats"]["max_values_by_cost"].items():
+            self.assertEqual(set(self.weights["main_stats"][cost]), set(pool))
+        changed = copy.deepcopy(self.weights)
+        changed["main_stats"]["1"]["atk_pct"] = 7
+        self.assertEqual(changed["main_stats"]["3"]["atk_pct"], self.weights["main_stats"]["3"]["atk_pct"])
+        self.assertEqual(changed["main_stats"]["4"]["atk_pct"], self.weights["main_stats"]["4"]["atk_pct"])
+        scorer = EchoScorer(self.stats, changed)
+        echo = {"cost": 1, "main_stat": {"name": "atk_pct", "value": 18}, "sub_stats": []}
+        self.assertEqual(scorer.score(echo)["main_stat"]["weight"], 7)
 
     def test_one_to_five_slots_accumulate(self):
         previous = -1
@@ -60,7 +79,7 @@ class EchoScorerTests(unittest.TestCase):
                  round(30 * self.weights["sub_stats"]["atk_flat"] / self.raw_maximum() * 50, 6))
 
     def test_zero_and_custom_weights(self):
-        self.weights["main_stats"]["crit_rate"] = 0
+        self.weights["main_stats"]["4"]["crit_rate"] = 0
         self.weights["sub_stats"]["crit_rate"] = 30
         self.echo["sub_stats"] = self.echo["sub_stats"][:1]
         self.assertEqual(EchoScorer(self.stats, self.weights).score(self.echo)["score"],
@@ -82,7 +101,7 @@ class EchoScorerTests(unittest.TestCase):
 
     def test_best_echo_is_aligned_to_fifty(self):
         _, cost, name, value = max(
-            (value * self.weights["main_stats"][name], cost, name, value)
+            (value * self.weights["main_stats"][cost][name], cost, name, value)
             for cost, pool in self.scorer.main_by_cost.items() for name, value in pool.items())
         best_subs = sorted(self.scorer.tiers,
                            key=lambda name: max(self.scorer.tiers[name]["values"]) *
@@ -95,9 +114,11 @@ class EchoScorerTests(unittest.TestCase):
     def test_zero_weights_and_uniform_rescaling(self):
         zero = copy.deepcopy(self.weights)
         scaled = copy.deepcopy(self.weights)
-        for category in ("main_stats", "sub_stats"):
-            zero[category] = dict.fromkeys(zero[category], 0)
-            scaled[category] = {name: value * 3 for name, value in scaled[category].items()}
+        zero["sub_stats"] = dict.fromkeys(zero["sub_stats"], 0)
+        scaled["sub_stats"] = {name: value * 3 for name, value in scaled["sub_stats"].items()}
+        for cost, pool in self.weights["main_stats"].items():
+            zero["main_stats"][cost] = dict.fromkeys(pool, 0)
+            scaled["main_stats"][cost] = {name: value * 3 for name, value in pool.items()}
         scorer = EchoScorer(self.stats, zero)
         self.assertEqual(scorer.unaligned_max_score, 0)
         self.assertEqual(scorer.aligned_max_score, 0)
@@ -107,9 +128,10 @@ class EchoScorerTests(unittest.TestCase):
 
     def test_maximum_ranks_value_times_weight_not_weight(self):
         weights = copy.deepcopy(self.weights)
-        for category in ("main_stats", "sub_stats"):
-            weights[category] = dict.fromkeys(weights[category], 0)
-        weights["main_stats"].update(crit_rate=2, crit_dmg=1.5)
+        weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+        for cost, pool in weights["main_stats"].items():
+            weights["main_stats"][cost] = dict.fromkeys(pool, 0)
+        weights["main_stats"]["4"].update(crit_rate=2, crit_dmg=1.5)
         weights["sub_stats"].update(hp_flat=1, crit_rate=2, crit_dmg=1,
                                    atk_pct=1, energy_regen=1, atk_flat=.5)
         scorer = EchoScorer(self.stats, weights)
@@ -158,6 +180,43 @@ class EchoScorerTests(unittest.TestCase):
                 weights["sub_stats"]["typo"] = 20
             with self.assertRaises(ValueError):
                 EchoScorer(self.stats, weights)
+
+    def test_cost_specific_weights_and_global_maximum(self):
+        weights = copy.deepcopy(self.weights)
+        weights["main_stats"] = copy.deepcopy(self.scorer.main_weights_by_cost)
+        for pool in weights["main_stats"].values():
+            for name in pool:
+                pool[name] = 0
+        weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+        weights["main_stats"]["1"]["atk_pct"] = 1
+        weights["main_stats"]["3"]["atk_pct"] = 2
+        weights["main_stats"]["4"]["atk_pct"] = 3
+        scorer = EchoScorer(self.stats, weights)
+        self.assertEqual(scorer.unaligned_max_score, 99)
+        for cost, value, expected in [(1, 18, 18 / 99 * 50), (3, 30, 60 / 99 * 50), (4, 33, 50)]:
+            echo = {"cost": cost, "main_stat": {"name": "atk_pct", "value": value}, "sub_stats": []}
+            self.assertEqual(scorer.score(echo)["score"], round(expected, 6))
+            echo.pop("cost")
+            self.assertEqual(scorer.score(echo)["score"], round(expected, 6))
+
+    def test_invalid_cost_specific_weights(self):
+        weights = copy.deepcopy(self.weights)
+        weights["main_stats"] = copy.deepcopy(self.scorer.main_weights_by_cost)
+        for value in (-1, True, float("inf")):
+            invalid = copy.deepcopy(weights)
+            invalid["main_stats"]["1"]["atk_pct"] = value
+            with self.assertRaises(ValueError):
+                EchoScorer(self.stats, invalid)
+        for action in ("missing_cost", "missing_stat", "extra_stat"):
+            invalid = copy.deepcopy(weights)
+            if action == "missing_cost":
+                del invalid["main_stats"]["3"]
+            elif action == "missing_stat":
+                del invalid["main_stats"]["1"]["atk_pct"]
+            else:
+                invalid["main_stats"]["1"]["crit_rate"] = 1
+            with self.assertRaises(ValueError):
+                EchoScorer(self.stats, invalid)
 
     def test_large_weights_do_not_overflow_intermediate_product(self):
         self.weights["sub_stats"]["crit_rate"] = 1e300

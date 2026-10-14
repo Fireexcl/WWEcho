@@ -139,9 +139,10 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_tab_order_and_layout(self):
         tabs = self.window.findChild(QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
-                         ["副词条权重", "主词条权重"])
+                         ["副词条权重", "Cost 1 主词条权重", "Cost 3 主词条权重", "Cost 4 主词条权重"])
         self.assertEqual(tabs.currentIndex(), 0)
-        for tab_index, category, pairs in [(0, "sub_stats", 2), (1, "main_stats", 2)]:
+        for tab_index, category, pairs in [(0, "sub_stats", 2), (1, "main_stats_1", 2),
+                                           (2, "main_stats_3", 2), (3, "main_stats_4", 2)]:
             table = tabs.widget(tab_index)
             inputs = self.window.weight_inputs[category]
             self.assertEqual(table.columnCount(), pairs * 2)
@@ -187,9 +188,40 @@ class EchoGuiTests(unittest.TestCase):
         self.choose_example()
         self.window.cost.setCurrentIndex(0)
         self.assertEqual(self.window.main_stat.count(), 3)
-        self.assertNotEqual(self.window.main_stat.currentData(), "crit_rate")
+        self.assertEqual(self.window.main_stat.currentData(), "atk_pct")
         self.window.sub_stat_buttons["crit_dmg"].click()
         self.assertEqual(len(self.window.current_echo()["sub_stats"]), 4)
+
+    def test_each_cost_resets_default_main_stat(self):
+        self.assertEqual(self.window.current_echo()["main_stat"], {"name": "crit_rate", "value": 22})
+        for cost, name, value in [(1, "atk_pct", 18), (3, "atk_pct", 30),
+                                   (4, "crit_rate", 22), (1, "atk_pct", 18)]:
+            self.window.main_stat.setCurrentIndex(self.window.main_stat.findData("hp_pct"))
+            self.window.cost.setCurrentIndex(self.window.cost.findData(cost))
+            self.assertEqual(self.window.current_echo()["main_stat"], {"name": name, "value": value})
+
+    def test_cost_weights_independent_roundtrip_and_legacy_import(self):
+        self.window.weight_inputs["main_stats_1"]["atk_pct"].setValue(1)
+        self.window.weight_inputs["main_stats_3"]["atk_pct"].setValue(3)
+        self.window.weight_inputs["main_stats_4"]["atk_pct"].setValue(4)
+        saved = self.window.current_weights()
+        self.window.restore_weights()
+        self.window.apply_weights(saved)
+        self.assertEqual(self.window.current_weights(), saved)
+        for cost in (1, 3, 4):
+            self.window.cost.setCurrentIndex(self.window.cost.findData(cost))
+            self.window.main_stat.setCurrentIndex(self.window.main_stat.findData("atk_pct"))
+            scored = EchoScorer(self.window.stats, saved).score(self.window.current_echo())
+            self.assertEqual(scored["main_stat"]["weight"], cost)
+            self.assertEqual(self.window.score_label.text(), f"{scored['score']:g} 分")
+        from src.echo_score import DEFAULT_WEIGHTS
+        legacy = load_json(DEFAULT_WEIGHTS)
+        legacy["main_stats"] = {name: value for pool in legacy["main_stats"].values()
+                    for name, value in pool.items()}
+        self.window.apply_weights(legacy)
+        for cost in ("1", "3", "4"):
+            self.assertEqual(self.window.current_weights()["main_stats"][cost]["atk_pct"],
+                             legacy["main_stats"]["atk_pct"])
 
     def test_all_sub_types_have_correct_tiers(self):
         for stat_id, data in self.window.stats["sub_stats"]["tiers"].items():
@@ -220,9 +252,10 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_theoretical_max_tracks_weights_and_not_selected_echo(self):
         weights = self.window.current_weights()
-        for category in ("main_stats", "sub_stats"):
-            weights[category] = dict.fromkeys(weights[category], 0)
-        weights["main_stats"]["healing_bonus"] = 25
+        weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+        for cost, pool in weights["main_stats"].items():
+            weights["main_stats"][cost] = dict.fromkeys(pool, 0)
+        weights["main_stats"]["4"]["healing_bonus"] = 25
         for stat_id, value in [("crit_rate", 20), ("crit_dmg", 15), ("atk_pct", 10),
                                ("energy_regen", 5), ("atk_flat", 2.5), ("hp_flat", 1)]:
             weights["sub_stats"][stat_id] = value
@@ -273,7 +306,7 @@ class EchoGuiTests(unittest.TestCase):
     def test_invalid_import_is_atomic_and_valid_roundtrips(self):
         original = self.window.current_weights()
         invalid = copy.deepcopy(original)
-        invalid["main_stats"]["hp_pct"] = 99
+        invalid["main_stats"]["1"]["hp_pct"] = 99
         invalid["sub_stats"]["crit_rate"] = 2_000_000
         with self.assertRaises(ValueError):
             self.window.apply_weights(invalid)
@@ -343,8 +376,8 @@ class EchoGuiTests(unittest.TestCase):
                                          "embryo_weight": 4, "bins": 1000})
         self.assertEqual(planner.target, 87)
         self.assertEqual(planner.costs, load_json(DEFAULT_STATS))
-        self.assertEqual(planner.scorer.weights, {category: {key: box.value() for key, box in inputs.items()}
-                                                 for category, inputs in self.window.weight_inputs.items()})
+        self.assertEqual(planner.scorer.weights, {category: self.window.current_weights()[category]
+                             for category in ("main_stats", "sub_stats")})
         self.assertEqual(ControlledPlanner.calls[-1][1], self.window.current_echo())
         self.assertNotEqual(planner.thread, threading.get_ident())
 
