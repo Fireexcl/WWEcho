@@ -13,6 +13,7 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATS = ROOT / "config" / "echo-stats.json"
 DEFAULT_WEIGHTS = ROOT / "config" / "score-weights.json"
+ALIGNMENT_SCORE = 50.0
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -37,7 +38,7 @@ def finite_number(value: Any, label: str) -> float:
 
 
 class EchoScorer:
-    """分数为主词条及已激活副词条的加权满档比例之和。"""
+    """数值乘以单位权重，以全局理论最高原始分对齐到 50 分。"""
 
     def __init__(self, stats: dict[str, Any], weights: dict[str, Any]) -> None:
         if stats.get("schema_version") != 1 or weights.get("schema_version") != 1:
@@ -62,6 +63,27 @@ class EchoScorer:
                 if weight < 0:
                     raise ValueError("权重不能为负数；无效属性请设为 0")
                 self.weights[category][stat_id] = weight
+
+        main_max = max(value * self.weights["main_stats"][stat_id]
+                       for pool in self.main_by_cost.values()
+                       for stat_id, value in pool.items())
+        sub_maxima = sorted((max(tier["values"]) * self.weights["sub_stats"][stat_id]
+                             for stat_id, tier in self.tiers.items()), reverse=True)
+        try:
+            self.unaligned_max_score = math.fsum(
+                [main_max] + sub_maxima[:self.stats["sub_stats"]["max_count"]])
+        except OverflowError as exc:
+            raise ValueError("权重过大，评分超出有限数值范围") from exc
+        if not math.isfinite(self.unaligned_max_score):
+            raise ValueError("权重过大，评分超出有限数值范围")
+        self.aligned_max_score = ALIGNMENT_SCORE if self.unaligned_max_score > 0 else 0.0
+
+    def stat_score(self, category: str, stat_id: str, value: float) -> float:
+        """返回未圆整贡献；评分明细和策略计算共用同一公式。"""
+        if self.unaligned_max_score == 0:
+            return 0.0
+        return (value * self.weights[category][stat_id] / self.unaligned_max_score
+                * ALIGNMENT_SCORE)
 
     @classmethod
     def from_files(cls, stats_path: Path = DEFAULT_STATS,
@@ -95,7 +117,7 @@ class EchoScorer:
             "reference_value": reference,
             "weight": weight,
             "ratio": round(ratio, 8),
-            "score": round(weight * ratio, 6),
+            "score": round(self.stat_score(category, stat_id, value), 6),
         }
 
     def score(self, echo: dict[str, Any]) -> dict[str, Any]:
@@ -141,8 +163,8 @@ class EchoScorer:
                 raise ValueError(f"{stat_id} 数值不属于合法档位：{values}")
             reference = max(values)
             subs.append(self._contribution("sub_stats", stat_id, matched, reference))
-            raw_sub_scores.append(self.weights["sub_stats"][stat_id] * (matched / reference))
-        main_score = self.weights["main_stats"][main_id]
+            raw_sub_scores.append(self.stat_score("sub_stats", stat_id, matched))
+        main_score = self.stat_score("main_stats", main_id, references[0])
         try:
             sub_score = math.fsum(raw_sub_scores)
             total = math.fsum([main_score, sub_score])

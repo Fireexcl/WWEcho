@@ -1,5 +1,7 @@
 import copy
 import io
+import json
+import math
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -13,44 +15,110 @@ class EchoScorerTests(unittest.TestCase):
         self.scorer = EchoScorer(self.stats, self.weights)
         self.echo = load_json(ROOT / "examples" / "echo.json")
 
+    def raw_maximum(self, weights=None):
+        weights = self.weights if weights is None else weights
+        main = max(value * weights["main_stats"][name]
+                   for pool in self.stats["main_stats"]["max_values_by_cost"].values()
+                   for name, value in pool.items())
+        subs = sorted((max(tier["values"]) * weights["sub_stats"][name]
+                       for name, tier in self.stats["sub_stats"]["tiers"].items()), reverse=True)
+        return math.fsum([main] + subs[:5])
+
+    def expected_scores(self, echo, weights=None):
+        weights = self.weights if weights is None else weights
+        maximum = self.raw_maximum(weights)
+        names = {data["name_zh"]: name for name, data in self.stats["stat_definitions"].items()}
+        def contribution(category, entry):
+            name = names.get(entry["name"], entry["name"])
+            return entry["value"] * weights[category][name] / maximum * 50 if maximum else 0
+        main_score = contribution("main_stats", echo["main_stat"])
+        sub_score = math.fsum(contribution("sub_stats", item) for item in echo["sub_stats"])
+        return round(main_score + sub_score, 6), round(main_score, 6), round(sub_score, 6)
+
     def test_full_echo(self):
         result = self.scorer.score(self.echo)
-        self.assertEqual(result["score"], 90)
-        self.assertEqual(result["main_score"], 20)
-        self.assertEqual(result["sub_score"], 70)
+        expected = self.expected_scores(self.echo)
+        self.assertEqual((result["score"], result["main_score"], result["sub_score"]), expected)
+        self.assertEqual(self.scorer.unaligned_max_score, self.raw_maximum())
 
     def test_one_to_five_slots_accumulate(self):
-        self.assertEqual(self.scorer.score(dict(self.echo, sub_stats=[]))["score"], 20)
-        for count, expected in enumerate([40, 60, 70, 80, 90], 1):
+        previous = -1
+        for count in range(6):
             with self.subTest(count=count):
                 echo = dict(self.echo, sub_stats=self.echo["sub_stats"][:count])
-                self.assertEqual(self.scorer.score(echo)["score"], expected)
+            score = self.scorer.score(echo)["score"]
+            self.assertEqual(score, self.expected_scores(echo)[0])
+            self.assertGreaterEqual(score, previous)
+            previous = score
 
     def test_reference_ratio_and_flat_units(self):
         self.echo["sub_stats"] = [{"name": "crit_rate", "value": 6.3},
                                   {"name": "atk_flat", "value": 30}]
-        self.assertEqual(self.scorer.score(self.echo)["score"], 34.5)
+        result = self.scorer.score(self.echo)
+        self.assertEqual(result["score"], self.expected_scores(self.echo)[0])
+        self.assertEqual(result["sub_stats"][1]["score"],
+                 round(30 * self.weights["sub_stats"]["atk_flat"] / self.raw_maximum() * 50, 6))
 
     def test_zero_and_custom_weights(self):
         self.weights["main_stats"]["crit_rate"] = 0
         self.weights["sub_stats"]["crit_rate"] = 30
         self.echo["sub_stats"] = self.echo["sub_stats"][:1]
-        self.assertEqual(EchoScorer(self.stats, self.weights).score(self.echo)["score"], 30)
+        self.assertEqual(EchoScorer(self.stats, self.weights).score(self.echo)["score"],
+                 self.expected_scores(self.echo)[0])
 
     def test_every_main_candidate(self):
         for cost, pool in self.stats["main_stats"]["max_values_by_cost"].items():
             for name, value in pool.items():
                 with self.subTest(cost=cost, name=name):
                     echo = dict(self.echo, cost=int(cost), main_stat={"name": name, "value": value})
-                    self.assertEqual(self.scorer.score(echo)["main_score"], 20)
+                    self.assertEqual(self.scorer.score(echo)["main_score"], self.expected_scores(echo)[1])
 
     def test_every_sub_tier(self):
         for name, data in self.stats["sub_stats"]["tiers"].items():
             for value in data["values"]:
                 with self.subTest(name=name, value=value):
                     echo = dict(self.echo, sub_stats=[{"name": name, "value": value}])
-                    expected = 20 + self.weights["sub_stats"][name] * value / max(data["values"])
-                    self.assertAlmostEqual(self.scorer.score(echo)["score"], expected, places=5)
+                    self.assertEqual(self.scorer.score(echo)["score"], self.expected_scores(echo)[0])
+
+    def test_best_echo_is_aligned_to_fifty(self):
+        _, cost, name, value = max(
+            (value * self.weights["main_stats"][name], cost, name, value)
+            for cost, pool in self.scorer.main_by_cost.items() for name, value in pool.items())
+        best_subs = sorted(self.scorer.tiers,
+                           key=lambda name: max(self.scorer.tiers[name]["values"]) *
+                           self.weights["sub_stats"][name], reverse=True)[:5]
+        echo = {"cost": int(cost), "main_stat": {"name": name, "value": value},
+                "sub_stats": [{"name": name, "value": max(self.scorer.tiers[name]["values"])}
+                              for name in best_subs]}
+        self.assertEqual(self.scorer.score(echo)["score"], 50)
+
+    def test_zero_weights_and_uniform_rescaling(self):
+        zero = copy.deepcopy(self.weights)
+        scaled = copy.deepcopy(self.weights)
+        for category in ("main_stats", "sub_stats"):
+            zero[category] = dict.fromkeys(zero[category], 0)
+            scaled[category] = {name: value * 3 for name, value in scaled[category].items()}
+        scorer = EchoScorer(self.stats, zero)
+        self.assertEqual(scorer.unaligned_max_score, 0)
+        self.assertEqual(scorer.aligned_max_score, 0)
+        self.assertEqual(scorer.score(self.echo)["score"], 0)
+        self.assertEqual(EchoScorer(self.stats, scaled).score(self.echo)["score"],
+                         self.scorer.score(self.echo)["score"])
+
+    def test_maximum_ranks_value_times_weight_not_weight(self):
+        weights = copy.deepcopy(self.weights)
+        for category in ("main_stats", "sub_stats"):
+            weights[category] = dict.fromkeys(weights[category], 0)
+        weights["main_stats"].update(crit_rate=2, crit_dmg=1.5)
+        weights["sub_stats"].update(hp_flat=1, crit_rate=2, crit_dmg=1,
+                                   atk_pct=1, energy_regen=1, atk_flat=.5)
+        scorer = EchoScorer(self.stats, weights)
+        self.assertAlmostEqual(scorer.unaligned_max_score, 66 + 580 + 21 + 21 + 12.4 + 30)
+        result = scorer.score(self.echo)
+        for category, items in [("main_stats", [result["main_stat"]]), ("sub_stats", result["sub_stats"])]:
+            for item in items:
+                self.assertEqual(item["score"], round(item["value"] * item["weight"] /
+                                                     scorer.unaligned_max_score * 50, 6))
 
     def test_invalid_inputs(self):
         invalid = [
@@ -92,10 +160,10 @@ class EchoScorerTests(unittest.TestCase):
                 EchoScorer(self.stats, weights)
 
     def test_large_weights_do_not_overflow_intermediate_product(self):
-        self.weights["sub_stats"]["crit_rate"] = 1e308
+        self.weights["sub_stats"]["crit_rate"] = 1e300
         self.echo["sub_stats"] = self.echo["sub_stats"][:1]
         scorer = EchoScorer(self.stats, self.weights)
-        self.assertEqual(scorer.score(self.echo)["score"], 1e308)
+        self.assertEqual(scorer.score(self.echo)["score"], 50)
 
     def test_total_overflow_is_validation_error(self):
         self.weights["sub_stats"]["crit_rate"] = 1e308
@@ -109,7 +177,9 @@ class EchoScorerTests(unittest.TestCase):
             args = [str(ROOT / "examples" / "echo.json")] + (["--details"] if details else [])
             with redirect_stdout(output):
                 self.assertEqual(main(args), 0)
-            self.assertIn('"score": 90.0' if details else "90.0", output.getvalue())
+            expected = self.expected_scores(self.echo)[0]
+            self.assertEqual(json.loads(output.getvalue())["score"] if details
+                             else float(output.getvalue()), expected)
 
     def test_cli_missing_file(self):
         with redirect_stderr(io.StringIO()) as error:

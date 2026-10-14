@@ -9,11 +9,19 @@ class StrategyTests(unittest.TestCase):
     def setUp(self):
         self.stats = load_json(DEFAULT_STATS)
         self.weights = load_json(DEFAULT_WEIGHTS)
+        # 独立于用户默认预设，构造原始满档贡献 20 + 70 的固定测试场景。
+        for category in ("main_stats", "sub_stats"):
+            self.weights[category] = dict.fromkeys(self.weights[category], 0)
+        self.weights["main_stats"]["crit_rate"] = 20 / 22
+        for name, contribution in [("crit_rate", 20), ("crit_dmg", 20), ("atk_pct", 10),
+                                   ("energy_regen", 10), ("basic_atk_dmg_bonus", 10), ("atk_flat", 5)]:
+            self.weights["sub_stats"][name] = contribution / max(self.stats["sub_stats"]["tiers"][name]["values"])
         self.costs = load_json(DEFAULT_COSTS)
         self.echo = {"cost": 4, "main_stat": {"name": "crit_rate", "value": 22}, "sub_stats": []}
 
     def planner(self, target, **kwargs):
-        return ActivationPlanner(EchoScorer(self.stats, self.weights), self.costs, target,
+        scorer = EchoScorer(self.stats, self.weights)
+        return ActivationPlanner(scorer, self.costs, target / scorer.unaligned_max_score * 50,
                                  bins=100, **kwargs)
 
     def test_main_already_reaches_target(self):
@@ -47,7 +55,7 @@ class StrategyTests(unittest.TestCase):
         # 只有暴击率有效，所有档位同分；抽到即成功。
         for name in self.weights["sub_stats"]:
             self.weights["sub_stats"][name] = 0
-        self.weights["sub_stats"]["crit_rate"] = 20
+        self.weights["sub_stats"]["crit_rate"] = 20 / 10.5
         self.stats["sub_stats"]["tiers"]["crit_rate"]["values"] = [10.5] * 8
         result = self.planner(30, threshold=0, recovery=.66).analyze(self.echo)["zero"]
         probability = 5 / 13
@@ -95,11 +103,15 @@ class StrategyTests(unittest.TestCase):
                                    {"name": "hp_flat", "value": 320}]
         planner = self.planner(60, threshold=0)
         known = {item["name"] for item in self.echo["sub_stats"]}
-        raw = 20 + sum(self.weights["sub_stats"][item["name"]] * item["value"] /
-                       max(self.stats["sub_stats"]["tiers"][item["name"]]["values"])
+        raw = planner.scorer.stat_score("main_stats", "crit_rate", 22) + sum(
+                   planner.scorer.stat_score("sub_stats", item["name"], item["value"])
                        for item in self.echo["sub_stats"])
         exact = sum(p / 9 for name, outcomes in zip(planner.ids, planner.outcomes)
-                    if name not in known for gain, p in outcomes if raw + gain >= 60)
+                    if name not in known for gain, p in outcomes if raw + gain >= planner.target)
+
+        for name, outcomes in zip(planner.ids, planner.outcomes):
+            for value, (gain, _) in zip(planner.scorer.tiers[name]["values"], outcomes):
+                self.assertEqual(gain, planner.scorer.stat_score("sub_stats", name, value))
         result = planner.analyze(self.echo)["current"]
         self.assertLessEqual(result["full_success_lower"], exact + 1e-12)
         self.assertGreaterEqual(result["full_success_upper"], exact - 1e-12)

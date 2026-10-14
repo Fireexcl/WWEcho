@@ -15,9 +15,9 @@ from unittest.mock import patch
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QDoubleSpinBox, QTabWidget
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QPushButton, QTabWidget
 from src.echo_gui import EchoWindow
-from src.echo_score import DEFAULT_STATS, load_json
+from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
 
 
 def strategy_result(reason="fake", *, unavailable=False):
@@ -117,10 +117,12 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_example_live_score_and_target(self):
         self.choose_example()
-        self.assertEqual(self.window.score_label.text(), "90 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
+        self.window.target.setValue(20)
         self.assertIn("已达目标", self.window.summary.text())
-        self.window.target.setValue(100)
-        self.assertIn("还差 10 分", self.window.summary.text())
+        self.window.target.setValue(50)
+        self.assertIn(f"还差 {50 - expected:g} 分", self.window.summary.text())
         self.assertEqual(self.window.details.rowCount(), 6)
         self.window.target.setValue(0)
         self.assertEqual(self.window.progress.value(), 1000)
@@ -128,9 +130,11 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_edit_and_restore(self):
         self.choose_example()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(30)
-        self.assertEqual(self.window.score_label.text(), "100 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.window.restore_weights()
-        self.assertEqual(self.window.score_label.text(), "90 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
 
     def test_weight_tab_order_and_layout(self):
         tabs = self.window.findChild(QTabWidget)
@@ -174,9 +178,10 @@ class EchoGuiTests(unittest.TestCase):
         QTest.keyClicks(box, "30.1256")
         QTest.keyClick(box, Qt.Key.Key_Return)
         self.assertEqual(box.value(), 30.1256)
-        self.assertEqual(self.window.score_label.text(), "100.126 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.window.target.stepUp()
-        self.assertEqual(self.window.target.value(), 81)
+        self.assertEqual(self.window.target.value(), 41)
 
     def test_cost_refreshes_main_and_keeps_selected_buttons(self):
         self.choose_example()
@@ -193,7 +198,7 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_sub_stat_options_use_three_columns_with_adjacent_tiers(self):
         self.assertEqual(len(self.window.sub_stat_buttons), 13)
-        self.assertTrue(all(isinstance(button, QCheckBox)
+        self.assertTrue(all(isinstance(button, QPushButton) and button.isCheckable()
                             for button in self.window.sub_stat_buttons.values()))
         for stat_id, button in self.window.sub_stat_buttons.items():
             self.assertIs(button.parentWidget(), self.window.sub_tier_inputs[stat_id].parentWidget())
@@ -203,6 +208,36 @@ class EchoGuiTests(unittest.TestCase):
             for button in self.window.sub_stat_buttons.values()]
         self.assertEqual(max(column for _, column in coordinates), 2)
         self.assertEqual(len(set(row for row, _ in coordinates)), 5)
+
+    def test_clear_button_is_next_to_selected_count(self):
+        layouts = self.window.findChildren(QGridLayout)
+        header = next(grid for grid in layouts if grid.itemAtPosition(0, 3) is not None
+                      and grid.itemAtPosition(0, 3).layout() is not None
+                      and grid.itemAtPosition(0, 3).layout().indexOf(self.window.selected_count) >= 0)
+        toolbar = header.itemAtPosition(0, 3).layout()
+        self.assertEqual(toolbar.indexOf(self.window.clear_sub_stats_button),
+                         toolbar.indexOf(self.window.selected_count) + 1)
+
+    def test_theoretical_max_tracks_weights_and_not_selected_echo(self):
+        weights = self.window.current_weights()
+        for category in ("main_stats", "sub_stats"):
+            weights[category] = dict.fromkeys(weights[category], 0)
+        weights["main_stats"]["healing_bonus"] = 25
+        for stat_id, value in [("crit_rate", 20), ("crit_dmg", 15), ("atk_pct", 10),
+                               ("energy_regen", 5), ("atk_flat", 2.5), ("hp_flat", 1)]:
+            weights["sub_stats"][stat_id] = value
+        self.window.apply_weights(weights)
+        self.assertEqual(self.window.theoretical_max_label.text(), "理论最高分：50 分（未对齐：2021）")
+        self.window.cost.setCurrentIndex(0)
+        self.window.clear_sub_stats_button.click()
+        self.assertEqual(self.window.theoretical_max_label.text(), "理论最高分：50 分（未对齐：2021）")
+        self.window.weight_inputs["sub_stats"]["hp_flat"].setValue(3)
+        self.assertEqual(self.window.theoretical_max_label.text(), "理论最高分：50 分（未对齐：3181）")
+        for inputs in self.window.weight_inputs.values():
+            for box in inputs.values():
+                box.setValue(0)
+        self.assertEqual(self.window.theoretical_max_label.text(), "理论最高分：0 分（未对齐：0）")
+        self.assertEqual(self.window.score_label.text(), "0 分")
 
     def test_sub_stat_options_limit_selection_and_remove_directly(self):
         self.choose_example()
@@ -326,7 +361,8 @@ class EchoGuiTests(unittest.TestCase):
         self.wait_until(lambda: bool(ControlledPlanner.instances))
         self.assertEqual(self.window.current_strategy.text(), "—")
         self.choose_example()
-        self.assertEqual(self.window.score_label.text(), "90 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         ControlledPlanner.build_gate.set()
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         self.assertEqual(threads, [self.app.thread()])
@@ -353,7 +389,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(rendered, ["target=85;count=1"])
         self.assertEqual(len(ControlledPlanner.calls), 2)
         self.assertEqual(ControlledPlanner.max_active, 1)
-        self.assertEqual([planner.target for planner in ControlledPlanner.instances], [80, 85])
+        self.assertEqual([planner.target for planner in ControlledPlanner.instances], [40, 85])
 
     def test_debounce_and_planner_cache_reused_for_new_echo(self):
         for value in (81, 82, 83):
@@ -388,7 +424,8 @@ class EchoGuiTests(unittest.TestCase):
         ControlledPlanner.error = ValueError("controlled failure")
         self.choose_example()
         self.wait_until(lambda: "controlled failure" in self.window.strategy_status.text())
-        self.assertEqual(self.window.score_label.text(), "90 分")
+        expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
+        self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.assertEqual(self.window.zero_strategy.text(), "—")
 
     def test_parameter_boundaries_zero_weights_and_threshold_one(self):
@@ -537,7 +574,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
         from src import echo_strategy
 
         real_planner = echo_strategy.ActivationPlanner
-        for target in (60, 1_000_000):
+        for target in (25, 1_000_000):
             with self.subTest(target=target):
                 builds, analyses, displays = [], [], []
 
@@ -562,6 +599,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
 
                     window._display_strategy = record_display
                     try:
+                        window.main_stat.setCurrentIndex(window.main_stat.findData("crit_rate"))
                         window.target.setValue(target)
                         window.strategy_inputs["threshold"].setValue(0)
                         self.wait_for_strategy(window)
@@ -575,7 +613,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                         self.assertEqual(window._strategy_cache["planner"].bins, 20)
                         result = analyses[0][2]
                         self.assert_results_match_api(window, result)
-                        if target == 60:
+                        if target == 25:
                             self.assertGreater(result["zero"]["success_probability"], 0)
                             self.assertLess(result["zero"]["success_probability"], 1)
                             self.assertIsNotNone(result["zero"]["expected_cost"])

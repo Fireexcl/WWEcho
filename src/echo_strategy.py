@@ -68,8 +68,7 @@ class ActivationPlanner:
             total = math.fsum(probabilities)
             if total <= 0:
                 raise ValueError("档位概率总和必须为正")
-            weight = scorer.weights["sub_stats"][stat_id]
-            self.outcomes.append([(weight * (value / max(values)), p / total)
+            self.outcomes.append([(scorer.stat_score("sub_stats", stat_id, value), p / total)
                                   for value, p in zip(values, probabilities)])
         self._main = None
 
@@ -154,14 +153,14 @@ class ActivationPlanner:
     def analyze(self, echo: dict[str, Any]) -> dict[str, Any]:
         result = self.scorer.score(echo)
         main_id = result["main_stat"]["stat_id"]
-        main = self.scorer.weights["main_stats"][main_id]
+        main = self.scorer.stat_score("main_stats", main_id, result["main_stat"]["value"])
         self._prepare(main)
         mask = 0
         low_score, high_score, raw = 0, 0, []
         for item in result["sub_stats"]:
             j = self.ids.index(item["stat_id"])
             mask |= 1 << j
-            gain = self.scorer.weights["sub_stats"][item["stat_id"]] * (item["value"] / item["reference_value"])
+            gain = self.scorer.stat_score("sub_stats", item["stat_id"], item["value"])
             raw.append(gain)
             low_score += math.floor(gain / self.resolution)
             high_score += math.ceil(gain / self.resolution)

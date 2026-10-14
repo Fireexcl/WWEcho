@@ -1,6 +1,6 @@
 {
     "schema_version": 1,
-    "description": "占位权重，非官方评分或角色伤害收益。每个权重表示该分类参考满档词条的分值；可设 0。",
+    "description": "自定义权重，非官方评分或角色伤害收益。每个权重表示该分类每单位词条数值的系数；数值乘权重后以全局理论最高原始分对齐到 50 分，可设 0。",
     "main_stats": {
         "hp_pct": 20,
         "atk_pct": 20,
@@ -18,17 +18,17 @@
     },
     "sub_stats": {
         "hp_flat": 0,
-        "atk_flat": 5,
+        "atk_flat": 0.12,
         "def_flat": 0,
         "hp_pct": 0,
-        "atk_pct": 10,
+        "atk_pct": 1.1,
         "def_pct": 0,
-        "crit_rate": 20,
-        "crit_dmg": 20,
-        "energy_regen": 10,
-        "basic_atk_dmg_bonus": 10,
-        "heavy_atk_dmg_bonus": 10,
-        "resonance_skill_dmg_bonus": 10,
-        "resonance_liberation_dmg_bonus": 10
+        "crit_rate": 2,
+        "crit_dmg": 1,
+        "energy_regen": 0.2,
+        "basic_atk_dmg_bonus": 0,
+        "heavy_atk_dmg_bonus": 0,
+        "resonance_skill_dmg_bonus": 0,
+        "resonance_liberation_dmg_bonus": 0.77
     }
 }

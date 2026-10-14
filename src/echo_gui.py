@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
+    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -114,7 +114,7 @@ class EchoWindow(QMainWindow):
         self._strategy_timer.setInterval(180)
         self._strategy_timer.timeout.connect(self._start_strategy)
         self.weight_inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
-        self.sub_stat_buttons: dict[str, QCheckBox] = {}
+        self.sub_stat_buttons: dict[str, QPushButton] = {}
         self.selected_sub_stats: list[str] = []
         self.sub_tier_inputs: dict[str, QComboBox] = {}
         self.setWindowTitle("WWEcho · 声骸评分")
@@ -160,7 +160,7 @@ class EchoWindow(QMainWindow):
         group = QGroupBox("01  权重配置")
         layout = QVBoxLayout(group)
         toolbar = QHBoxLayout()
-        hint = QLabel("权重 = 一个满档词条的分值；0 表示不计分。当前默认值仅为占位。")
+        hint = QLabel("权重 = 每单位词条数值的系数；全局理论最高分对齐为 50 分，0 表示不计分。")
         hint.setWordWrap(True)
         toolbar.addWidget(hint, 1)
         for text, callback in [("导入", self.import_weights), ("导出", self.export_weights),
@@ -209,7 +209,12 @@ class EchoWindow(QMainWindow):
         header.addWidget(QLabel("Cost"), 0, 0)
         header.addWidget(self.cost, 0, 1)
         header.addWidget(QLabel("已选副词条"), 0, 2)
-        header.addWidget(self.selected_count, 0, 3)
+        selection_toolbar = QHBoxLayout()
+        selection_toolbar.addWidget(self.selected_count)
+        self.clear_sub_stats_button = QPushButton("清空勾选")
+        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
+        selection_toolbar.addWidget(self.clear_sub_stats_button)
+        header.addLayout(selection_toolbar, 0, 3)
         header.addWidget(QLabel("满级主词条"), 1, 0)
         header.addWidget(self.main_stat, 1, 1)
         header.addWidget(self.main_value, 1, 2, 1, 2)
@@ -224,7 +229,9 @@ class EchoWindow(QMainWindow):
             option_layout = QHBoxLayout(option)
             option_layout.setContentsMargins(4, 2, 4, 2)
             option_layout.setSpacing(6)
-            button = QCheckBox(self.stats["stat_definitions"][stat_id]["name_zh"])
+            button = QPushButton(self.stats["stat_definitions"][stat_id]["name_zh"])
+            button.setCheckable(True)
+            button.setMinimumHeight(34)
             button.setMinimumWidth(88)
             button.toggled.connect(
                 lambda checked, selected_id=stat_id: self._toggle_sub_stat(selected_id, checked)
@@ -246,9 +253,6 @@ class EchoWindow(QMainWindow):
         for column in range(3):
             options.setColumnStretch(column, 1)
         layout.addLayout(options)
-        self.clear_sub_stats_button = QPushButton("清空勾选")
-        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
-        layout.addWidget(self.clear_sub_stats_button, alignment=Qt.AlignmentFlag.AlignRight)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
         hint = QLabel()
@@ -263,9 +267,15 @@ class EchoWindow(QMainWindow):
         layout = QVBoxLayout(group)
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("目标分数"))
-        self.target = self._number(80)
+        self.target = self._number(40)
         self.target.valueChanged.connect(self.calculate)
         toolbar.addWidget(self.target)
+        self.theoretical_max_label = QLabel("理论最高分：—")
+        self.theoretical_max_label.setToolTip(
+            "未对齐最高分 = 所有 Cost 中最大的主词条数值 × 权重，"
+            "加上贡献最高的 5 种不同满档副词条；对齐后最高 50 分。"
+            "不受当前词条选择限制，不计固定小词条；全零权重时为 0 分。")
+        toolbar.addWidget(self.theoretical_max_label)
         toolbar.addStretch()
         button = QPushButton("计算评分")
         button.setObjectName("primary")
@@ -412,6 +422,7 @@ class EchoWindow(QMainWindow):
     def calculate(self) -> None:
         if self.updating or self._closing:
             return
+        weights = self.current_weights()
         # 所有输入变化（包括无效输入）立即使旧版本失效。
         self._strategy_version += 1
         self._strategy_pending = None
@@ -419,8 +430,13 @@ class EchoWindow(QMainWindow):
         self.zero_strategy.setText("—")
         self.current_strategy.setText("—")
         try:
-            result = EchoScorer(self.stats, self.current_weights()).score(self.current_echo())
+            scorer = EchoScorer(self.stats, weights)
+            self.theoretical_max_label.setText(
+                f"理论最高分：{scorer.aligned_max_score:g} 分"
+                f"（未对齐：{scorer.unaligned_max_score:g}）")
+            result = scorer.score(self.current_echo())
         except ValueError as exc:
+            self.theoretical_max_label.setText("理论最高分：—")
             self.score_label.setText("—")
             self.summary.setText(f"输入有误：{exc}")
             self.details.setRowCount(0)
