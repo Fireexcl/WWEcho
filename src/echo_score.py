@@ -46,6 +46,23 @@ class EchoScorer:
         self.stats = stats
         self.definitions = stats["stat_definitions"]
         self.main_by_cost = stats["main_stats"]["max_values_by_cost"]
+        # 小词条仅预留权重，不参与当前评分和全局最高分。
+        minor_pools = stats["minor_stats"]["max_values_by_cost"]
+        minor_values = weights.get("minor_stats", {
+            cost: dict.fromkeys(pool, 0) for cost, pool in minor_pools.items()})
+        if not isinstance(minor_values, dict) or set(minor_values) != set(minor_pools):
+            raise ValueError("小词条权重必须包含 Cost 1、3、4")
+        self.minor_weights_by_cost: dict[str, dict[str, float]] = {}
+        for cost, pool in minor_pools.items():
+            values = minor_values[cost]
+            if not isinstance(values, dict) or set(values) != set(pool):
+                raise ValueError(f"小词条权重 Cost {cost} 必须仅包含对应的固定小词条")
+            self.minor_weights_by_cost[cost] = {}
+            for stat_id, value in values.items():
+                weight = finite_number(value, f"minor_stats.{cost}.{stat_id} 权重")
+                if weight < 0:
+                    raise ValueError("权重不能为负数；无效属性请设为 0")
+                self.minor_weights_by_cost[cost][stat_id] = weight
         self.tiers = stats["sub_stats"]["tiers"]
         self.names = {definition["name_zh"]: stat_id
                       for stat_id, definition in self.definitions.items()}

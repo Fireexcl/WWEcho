@@ -139,7 +139,7 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_tab_order_and_layout(self):
         tabs = self.window.findChild(QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
-                         ["副词条权重", "Cost 1 主词条权重", "Cost 3 主词条权重", "Cost 4 主词条权重"])
+                         ["副词条权重", "Cost 1 主词条权重", "Cost 3 主词条权重", "Cost 4 主词条权重", "小词条权重"])
         self.assertEqual(tabs.currentIndex(), 0)
         for tab_index, category, pairs in [(0, "sub_stats", 2), (1, "main_stats_1", 2),
                                            (2, "main_stats_3", 2), (3, "main_stats_4", 2)]:
@@ -183,6 +183,33 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.window.target.stepUp()
         self.assertEqual(self.window.target.value(), 41)
+
+    def test_minor_weights_tab_roundtrip_restore_and_old_preset(self):
+        table = self.window.weight_tabs.widget(4)
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(table.columnCount(), 4)
+        labels = [table.item(0, 0).text(), table.item(0, 2).text(), table.item(1, 0).text()]
+        self.assertEqual(labels, ["Cost 4 · 固定攻击", "Cost 3 · 固定攻击", "Cost 1 · 固定生命"])
+        self.assertEqual(set(self.window.weight_inputs["minor_stats"]), {"1", "3", "4"})
+        previous_score = self.window.score_label.text()
+        for cost, value in [("4", .12), ("3", .1), ("1", .01)]:
+            self.window.weight_inputs["minor_stats"][cost].setValue(value)
+        saved = self.window.current_weights()
+        self.assertEqual(saved["minor_stats"], {"4": {"atk_flat": .12},
+                                               "3": {"atk_flat": .1}, "1": {"hp_flat": .01}})
+        self.assertEqual(self.window.score_label.text(), previous_score)
+        self.window.restore_weights()
+        self.assertEqual(self.window.current_weights()["minor_stats"], self.window.defaults["minor_stats"])
+        self.window.apply_weights(saved)
+        self.assertEqual(self.window.current_weights(), saved)
+        invalid = copy.deepcopy(saved)
+        invalid["minor_stats"]["4"]["atk_flat"] = 2_000_000
+        with self.assertRaises(ValueError):
+            self.window.apply_weights(invalid)
+        self.assertEqual(self.window.current_weights(), saved)
+        del saved["minor_stats"]
+        self.window.apply_weights(saved)
+        self.assertTrue(all(box.value() == 0 for box in self.window.weight_inputs["minor_stats"].values()))
 
     def test_cost_refreshes_main_and_keeps_selected_buttons(self):
         self.choose_example()

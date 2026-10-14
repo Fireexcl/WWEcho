@@ -101,6 +101,7 @@ class EchoWindow(QMainWindow):
         self.defaults = load_json(DEFAULT_WEIGHTS)
         default_scorer = EchoScorer(self.stats, self.defaults)
         self.defaults["main_stats"] = deepcopy(default_scorer.main_weights_by_cost)
+        self.defaults["minor_stats"] = deepcopy(default_scorer.minor_weights_by_cost)
         self.updating = True
         self._closing = False
         self._strategy_version = 0
@@ -175,6 +176,9 @@ class EchoWindow(QMainWindow):
         groups = [("sub_stats", "副词条权重", self.defaults["sub_stats"])] + [
             (f"main_stats_{cost}", f"Cost {cost} 主词条权重", self.defaults["main_stats"][cost])
             for cost in ("1", "3", "4")]
+        groups.append(("minor_stats", "小词条权重", {
+            cost: next(iter(self.defaults["minor_stats"][cost].values()))
+            for cost in ("4", "3", "1")}))
         for category, title, values in groups:
             pairs_per_row = 2
             row_count = (len(values) + pairs_per_row - 1) // pairs_per_row
@@ -189,12 +193,19 @@ class EchoWindow(QMainWindow):
             for index, (stat_id, value) in enumerate(values.items()):
                 row, pair = divmod(index, pairs_per_row)
                 column = pair * 2
-                table.setItem(row, column, QTableWidgetItem(self.stats["stat_definitions"][stat_id]["name_zh"]))
+                if category == "minor_stats":
+                    minor_id = next(iter(self.stats["minor_stats"]["max_values_by_cost"][stat_id]))
+                    label = f"Cost {stat_id} · {self.stats['stat_definitions'][minor_id]['name_zh']}"
+                else:
+                    label = self.stats["stat_definitions"][stat_id]["name_zh"]
+                table.setItem(row, column, QTableWidgetItem(label))
                 box = self._number(value, manual_only=True)
                 box.valueChanged.connect(self.calculate)
                 table.setCellWidget(row, column + 1, box)
                 table.setRowHeight(row, 40)
                 self.weight_inputs[category][stat_id] = box
+                if category == "minor_stats":
+                    box.setToolTip("小词条预设权重：当前仅保存，不参与评分。")
             tabs.addTab(table, title)
         layout.addWidget(tabs)
         return group
@@ -415,7 +426,9 @@ class EchoWindow(QMainWindow):
                 "sub_stats": {stat_id: box.value() for stat_id, box in self.weight_inputs["sub_stats"].items()},
                 "main_stats": {cost: {stat_id: box.value() for stat_id, box in
                                       self.weight_inputs[f"main_stats_{cost}"].items()}
-                               for cost in ("1", "3", "4")}}
+                           for cost in ("1", "3", "4")},
+                  "minor_stats": {cost: {next(iter(self.stats["minor_stats"]["max_values_by_cost"][cost])): box.value()}
+                            for cost, box in self.weight_inputs["minor_stats"].items()}}
 
     def current_echo(self) -> dict[str, Any]:
         cost = self.cost.currentData()
@@ -543,6 +556,8 @@ class EchoWindow(QMainWindow):
     def apply_weights(self, weights: dict[str, Any]) -> None:
         scorer = EchoScorer(self.stats, weights)
         values = {"sub_stats": scorer.weights["sub_stats"],
+                  "minor_stats": {cost: next(iter(pool.values()))
+                                  for cost, pool in scorer.minor_weights_by_cost.items()},
                   **{f"main_stats_{cost}": pool for cost, pool in scorer.main_weights_by_cost.items()}}
         for category, inputs in self.weight_inputs.items():
             for stat_id, box in inputs.items():

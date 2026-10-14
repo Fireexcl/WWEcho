@@ -181,6 +181,25 @@ class EchoScorerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 EchoScorer(self.stats, weights)
 
+    def test_minor_weight_validation_and_legacy_default(self):
+        self.assertEqual(set(self.weights["minor_stats"]), {"1", "3", "4"})
+        for cost, name in [("4", "atk_flat"), ("3", "atk_flat"), ("1", "hp_flat")]:
+            self.assertEqual(set(self.weights["minor_stats"][cost]), {name})
+            for value in (-1, True, "1", float("inf")):
+                invalid = copy.deepcopy(self.weights)
+                invalid["minor_stats"][cost][name] = value
+                with self.assertRaises(ValueError):
+                    EchoScorer(self.stats, invalid)
+        legacy = copy.deepcopy(self.weights)
+        del legacy["minor_stats"]
+        scorer = EchoScorer(self.stats, legacy)
+        self.assertEqual(scorer.minor_weights_by_cost, self.weights["minor_stats"])
+        self.assertEqual(scorer.score(self.echo), self.scorer.score(self.echo))
+        invalid = copy.deepcopy(self.weights)
+        invalid["minor_stats"]["4"]["hp_flat"] = 1
+        with self.assertRaises(ValueError):
+            EchoScorer(self.stats, invalid)
+
     def test_cost_specific_weights_and_global_maximum(self):
         weights = copy.deepcopy(self.weights)
         weights["main_stats"] = copy.deepcopy(self.scorer.main_weights_by_cost)
