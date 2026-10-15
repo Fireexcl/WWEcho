@@ -16,7 +16,7 @@ from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QPushButton, QTabWidget
-from src.echo_gui import EchoWindow
+from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
 
 
@@ -123,9 +123,77 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("已达目标", self.window.summary.text())
         self.window.target.setValue(50)
         self.assertIn(f"还差 {50 - expected:g} 分", self.window.summary.text())
-        self.assertEqual(self.window.details.rowCount(), 6)
+        self.assertEqual(self.window.details.rowCount(), 7)
         self.window.target.setValue(0)
-        self.assertEqual(self.window.progress.value(), 1000)
+        self.assertEqual(self.window.progress.value(), int(expected / 50 * 1000))
+
+    def test_score_results_directly_below_target_before_strategy_parameters(self):
+        layout = self.window.score_label.parentWidget().layout()
+        self.assertIs(layout.itemAt(0).layout().itemAt(1).widget(), self.window.target)
+        self.assertIs(layout.itemAt(1).layout().itemAt(0).widget(), self.window.score_label)
+        self.assertIs(layout.itemAt(2).widget(), self.window.progress_status)
+        self.assertIs(layout.itemAt(3).widget(), self.window.progress)
+        self.assertIs(layout.itemAt(5).widget(), self.window.details)
+        self.assertIsInstance(layout.itemAt(6).layout(), QGridLayout)
+
+    def test_progress_uses_fixed_fifty_point_scale_when_target_changes(self):
+        expected = int(self.window._score_result["score"] / 50 * 1000)
+        for target in (0, 20, 40, 50, 87):
+            self.window.target.setValue(target)
+            self.assertEqual(self.window.progress.value(), expected)
+            self.assertEqual(self.window.progress.target_score, target)
+            self.assertEqual(self.window.progress_target_label.text(), f"│ 目标 {target:g} 分")
+
+    def test_target_marker_position_resize_and_visible_over_full_bar(self):
+        progress = ScoreProgressBar()
+        try:
+            progress.show()
+            for width in (202, 402):
+                progress.resize(width, 18)
+                for target in (0, 20, 40, 50, 87):
+                    progress.set_target_score(target)
+                    self.app.processEvents()
+                    marker = progress.target_marker
+                    expected_x = round((width - 2) * min(target / 50, 1))
+                    self.assertEqual(marker.geometry().getRect(), (expected_x, 0, 2, 18))
+                    progress.setValue(1000)
+                    image = progress.grab().toImage()
+                    self.assertEqual(image.pixelColor(expected_x, 9).name(), "#243247")
+        finally:
+            progress.close()
+            progress.deleteLater()
+
+    def test_progress_recommendation_colors_and_pending_reset(self):
+        self.window._strategy_timer.stop()
+        result = strategy_result()
+        for recommend, text, color in [(True, "推荐继续", "#16a34a"),
+                                       (False, "推荐放弃", "#dc2626")]:
+            result["current"]["recommend_continue"] = recommend
+            self.window._display_strategy(result)
+            self.assertEqual(self.window.progress_status.text(), text)
+            self.assertIn(color, self.window.progress.styleSheet())
+            self.assertIn(color, self.window.progress_status.styleSheet())
+        self.window.target.setValue(41)
+        self.assertEqual(self.window.progress_status.text(), "推荐计算中")
+        self.assertIn("#94a3b8", self.window.progress.styleSheet())
+
+    def test_five_substats_final_status_overrides_strategy_recommendation(self):
+        self.choose_example()
+        score = self.window._score_result["score"]
+        result = strategy_result()
+        for target, text, color in [(int(score), "达成目标", "#16a34a"),
+                                    (50, "下次好运", "#dc2626")]:
+            self.window.target.setValue(target)
+            self.assertEqual(self.window.progress_status.text(), text)
+            for recommend in (True, False):
+                result["current"]["recommend_continue"] = recommend
+                self.window._display_strategy(result)
+                self.assertEqual(self.window.progress_status.text(), text)
+                self.assertIn(color, self.window.progress.styleSheet())
+        self.window.clear_sub_stats()
+        self.assertEqual(self.window.progress_status.text(), "推荐计算中")
+        self.window.target.setValue(0)
+        self.assertEqual(self.window.progress_status.text(), "达成目标")
 
     def test_weight_edit_and_restore(self):
         self.choose_example()
@@ -197,7 +265,7 @@ class EchoGuiTests(unittest.TestCase):
         saved = self.window.current_weights()
         self.assertEqual(saved["minor_stats"], {"4": {"atk_flat": .12},
                                                "3": {"atk_flat": .1}, "1": {"hp_flat": .01}})
-        self.assertEqual(self.window.score_label.text(), previous_score)
+        self.assertNotEqual(self.window.score_label.text(), previous_score)
         self.window.restore_weights()
         self.assertEqual(self.window.current_weights()["minor_stats"], self.window.defaults["minor_stats"])
         self.window.apply_weights(saved)
@@ -226,6 +294,19 @@ class EchoGuiTests(unittest.TestCase):
             self.window.main_stat.setCurrentIndex(self.window.main_stat.findData("hp_pct"))
             self.window.cost.setCurrentIndex(self.window.cost.findData(cost))
             self.assertEqual(self.window.current_echo()["main_stat"], {"name": name, "value": value})
+
+    def test_minor_stat_follows_cost_and_contributes_to_total(self):
+        for cost, name, value in [(1, "固定生命", 2280), (3, "固定攻击", 100), (4, "固定攻击", 150)]:
+            self.window.weight_inputs["minor_stats"][str(cost)].setValue(.1)
+            self.window.cost.setCurrentIndex(self.window.cost.findData(cost))
+            self.assertEqual(self.window.minor_stat_label.text(), name)
+            self.assertIn(str(value), self.window.minor_value.text())
+            result = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())
+            self.assertGreater(result["minor_score"], 0)
+            self.assertAlmostEqual(result["score"], result["main_score"] + result["minor_score"], places=5)
+            self.assertEqual(self.window.details.item(1, 0).text(), "小词条")
+            self.assertEqual(self.window.details.item(1, 2).text(), str(value))
+            self.assertIn(f"小词条 {result['minor_score']:g} 分", self.window.summary.text())
 
     def test_cost_weights_independent_roundtrip_and_legacy_import(self):
         self.window.weight_inputs["main_stats_1"]["atk_pct"].setValue(1)
@@ -279,6 +360,9 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_theoretical_max_tracks_weights_and_not_selected_echo(self):
         weights = self.window.current_weights()
+        for pool in weights["minor_stats"].values():
+            for name in pool:
+                pool[name] = 0
         weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
         for cost, pool in weights["main_stats"].items():
             weights["main_stats"][cost] = dict.fromkeys(pool, 0)
@@ -369,11 +453,12 @@ class EchoGuiTests(unittest.TestCase):
         self.assertNotEqual(self.window.score_label.text(), "—")
 
     def test_zero_to_five_substats_score_and_strategy(self):
-        self.assertEqual(len(self.window.selected_sub_stats), 1)
-        self.window.sub_stat_buttons[self.window.selected_sub_stats[0]].click()
+        self.assertEqual(len(self.window.selected_sub_stats), 0)
+        self.assertTrue(all(not button.isChecked() for button in self.window.sub_stat_buttons.values()))
+        self.assertTrue(all(not tier.isEnabled() for tier in self.window.sub_tier_inputs.values()))
         self.assertEqual(self.window.current_echo()["sub_stats"], [])
         self.assertIn("已激活 0/5", self.window.summary.text())
-        self.assertEqual(self.window.details.rowCount(), 1)
+        self.assertEqual(self.window.details.rowCount(), 2)
         self.wait_until(lambda: "count=0" in self.window.current_strategy.text())
         self.choose_example()
         self.wait_until(lambda: "count=5" in self.window.current_strategy.text())
@@ -444,9 +529,11 @@ class EchoGuiTests(unittest.TestCase):
         QTest.qWait(250)
         self.assertEqual(len(ControlledPlanner.calls), 1)
         self.assertEqual(self.window.current_strategy.text(), "—")
+        self.assertEqual(self.window.progress_status.text(), "推荐计算中")
         ControlledPlanner.gate.set()
         self.wait_until(lambda: "target=85" in self.window.current_strategy.text())
-        self.assertEqual(rendered, ["target=85;count=1"])
+        self.assertEqual(rendered, ["target=85;count=0"])
+        self.assertEqual(self.window.progress_status.text(), "推荐放弃")
         self.assertEqual(len(ControlledPlanner.calls), 2)
         self.assertEqual(ControlledPlanner.max_active, 1)
         self.assertEqual([planner.target for planner in ControlledPlanner.instances], [40, 85])
@@ -457,7 +544,8 @@ class EchoGuiTests(unittest.TestCase):
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         self.assertEqual(len(ControlledPlanner.calls), 1)
         self.assertEqual(len(ControlledPlanner.instances), 1)
-        tier = self.window.sub_tier_inputs[self.window.selected_sub_stats[0]]
+        self.window.sub_stat_buttons["crit_rate"].click()
+        tier = self.window.sub_tier_inputs["crit_rate"]
         tier.setCurrentIndex(tier.count() - 1)
         self.wait_until(lambda: len(ControlledPlanner.calls) == 2 and
                         "策略已更新" in self.window.strategy_status.text())
@@ -508,7 +596,8 @@ class EchoGuiTests(unittest.TestCase):
         ControlledPlanner.gate.clear()
         self.wait_until(lambda: len(ControlledPlanner.calls) == 1)
         # 制造评分不合法的新快照，旧任务的错误和成功均不得覆盖输入错误。
-        stat_id = self.window.selected_sub_stats[0]
+        stat_id = "crit_rate"
+        self.window.sub_stat_buttons[stat_id].click()
         tier = self.window.sub_tier_inputs[stat_id]
         tier.addItem("invalid", -1)
         tier.setCurrentIndex(tier.count() - 1)
@@ -518,6 +607,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.strategy_status.text(), "策略输入无效")
         self.assertEqual(self.window.zero_strategy.text(), "—")
         self.assertIn("输入有误", self.window.summary.text())
+        self.assertEqual(self.window.progress_status.text(), "输入有误")
         self.assertEqual(len(ControlledPlanner.calls), 1)
         ControlledPlanner.error = None
         tier.setCurrentIndex(0)
@@ -596,10 +686,11 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
               f"未达目标 · 还差 {target - score:g} 分")
         self.assertEqual(window.summary.text(), status +
                  f"\n主词条 {scored['main_score']:g} 分 + 副词条 {scored['sub_score']:g} 分"
+                 f" + 小词条 {scored['minor_score']:g} 分"
                  f" · 已激活 {scored['activated_count']}/5")
         self.assertEqual(window.progress.value(),
-                 1000 if target == 0 else min(1000, int(score / target * 1000)))
-        entries = [("主词条", scored["main_stat"])] + [("副词条", item) for item in scored["sub_stats"]]
+                         min(1000, int(score / 50 * 1000)))
+        entries = [("主词条", scored["main_stat"]), ("小词条", scored["minor_stat"])] + [("副词条", item) for item in scored["sub_stats"]]
         self.assertEqual(window.details.rowCount(), len(entries))
         for row, (category, item) in enumerate(entries):
             suffix = "%" if window.stats["stat_definitions"][item["stat_id"]]["unit"] == "percentage_points" else ""
@@ -613,13 +704,14 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
         try:
             # 保留真实完整属性/概率/成本及 bins=1000，不替换任何 planner。
             # 主词条已达标，默认精度端到端测试无需遍历完整 DP。
-            window.target.setValue(20)
+            window.target.setValue(1)
             self.wait_for_strategy(window)
             planner = window._strategy_cache["planner"]
             self.assertEqual(planner.bins, 1000)
-            self.assertEqual(planner.target, 20)
+            self.assertEqual(planner.target, 1)
             self.assert_results_match_api(window, planner.analyze(window.current_echo()))
-            self.assertIn("已激活 1/5", window.summary.text())
+            self.assertIn("已激活 0/5", window.summary.text())
+
             self.assertIn("完整激活概率区间：100.00% ～ 100.00%", window.zero_strategy.text())
             self.assertIn("期望胚子：1 · 调谐：0 · 净经验：0", window.zero_strategy.text())
             self.assertIn("目标已达成，无需继续", window.current_strategy.text())

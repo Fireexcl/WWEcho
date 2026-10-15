@@ -153,7 +153,11 @@ class ActivationPlanner:
     def analyze(self, echo: dict[str, Any]) -> dict[str, Any]:
         result = self.scorer.score(echo)
         main_id = result["main_stat"]["stat_id"]
-        main = self.scorer.stat_score("main_stats", main_id, result["main_stat"]["value"], echo.get("cost"))
+        main = math.fsum([
+            self.scorer.stat_score("main_stats", main_id, result["main_stat"]["value"], result["cost"]),
+            self.scorer.stat_score("minor_stats", result["minor_stat"]["stat_id"],
+                                   result["minor_stat"]["value"], result["cost"]),
+        ])
         self._prepare(main)
         mask = 0
         low_score, high_score, raw = 0, 0, []

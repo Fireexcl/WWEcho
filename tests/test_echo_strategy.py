@@ -9,6 +9,8 @@ class StrategyTests(unittest.TestCase):
     def setUp(self):
         self.stats = load_json(DEFAULT_STATS)
         self.weights = load_json(DEFAULT_WEIGHTS)
+        self.weights["minor_stats"] = {cost: dict.fromkeys(pool, 0)
+                          for cost, pool in self.weights["minor_stats"].items()}
         # 独立于用户默认预设，构造原始满档贡献 20 + 70 的固定测试场景。
         self.weights["sub_stats"] = dict.fromkeys(self.weights["sub_stats"], 0)
         for cost, pool in self.weights["main_stats"].items():
@@ -29,6 +31,16 @@ class StrategyTests(unittest.TestCase):
         result = self.planner(20).analyze(self.echo)
         self.assertEqual(result["zero"]["expected_embryos"], 1)
         self.assertEqual(result["zero"]["expected_cost"], 1)
+        self.assertFalse(result["current"]["recommend_continue"])
+
+    def test_minor_base_score_can_reach_target_without_substats(self):
+        self.weights["minor_stats"]["4"]["atk_flat"] = 1
+        scorer = EchoScorer(self.stats, self.weights)
+        base = scorer.stat_score("main_stats", "crit_rate", 22, 4) + scorer.stat_score("minor_stats", "atk_flat", 150, 4)
+        planner = ActivationPlanner(scorer, self.costs, base - .01, bins=100)
+        result = planner.analyze(self.echo)
+        self.assertEqual(result["zero"]["success_probability"], 1)
+        self.assertEqual(result["zero"]["expected_tuning"], 0)
         self.assertFalse(result["current"]["recommend_continue"])
 
     def test_unreachable_and_no_division_by_zero(self):

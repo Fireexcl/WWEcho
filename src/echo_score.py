@@ -46,8 +46,8 @@ class EchoScorer:
         self.stats = stats
         self.definitions = stats["stat_definitions"]
         self.main_by_cost = stats["main_stats"]["max_values_by_cost"]
-        # 小词条仅预留权重，不参与当前评分和全局最高分。
         minor_pools = stats["minor_stats"]["max_values_by_cost"]
+        self.minor_by_cost = minor_pools
         minor_values = weights.get("minor_stats", {
             cost: dict.fromkeys(pool, 0) for cost, pool in minor_pools.items()})
         if not isinstance(minor_values, dict) or set(minor_values) != set(minor_pools):
@@ -99,14 +99,17 @@ class EchoScorer:
         self.main_weights_by_cost = (self.weights["main_stats"] if by_cost else {
             cost: {stat_id: self.weights["main_stats"][stat_id] for stat_id in pool}
             for cost, pool in self.main_by_cost.items()})
-        main_max = max(value * self.main_weights_by_cost[cost][stat_id]
-                       for cost, pool in self.main_by_cost.items()
-                       for stat_id, value in pool.items())
         sub_maxima = sorted((max(tier["values"]) * self.weights["sub_stats"][stat_id]
                              for stat_id, tier in self.tiers.items()), reverse=True)
         try:
+            base_maxima = []
+            for cost, pool in self.main_by_cost.items():
+                minor_raw = math.fsum(value * self.minor_weights_by_cost[cost][name]
+                                      for name, value in self.minor_by_cost[cost].items())
+                for name, value in pool.items():
+                    base_maxima.append(math.fsum([value * self.main_weights_by_cost[cost][name], minor_raw]))
             self.unaligned_max_score = math.fsum(
-                [main_max] + sub_maxima[:self.stats["sub_stats"]["max_count"]])
+                [max(base_maxima)] + sub_maxima[:self.stats["sub_stats"]["max_count"]])
         except OverflowError as exc:
             raise ValueError("权重过大，评分超出有限数值范围") from exc
         if not math.isfinite(self.unaligned_max_score):
@@ -124,6 +127,10 @@ class EchoScorer:
 
     def stat_weight(self, category: str, stat_id: str, value: float,
                     cost: Optional[int] = None) -> float:
+        if category == "minor_stats":
+            if cost is None:
+                raise ValueError("小词条权重需要 cost")
+            return self.minor_weights_by_cost[str(cost)][stat_id]
         if category != "main_stats":
             return self.weights[category][stat_id]
         candidates = [key for key, pool in self.main_by_cost.items()
@@ -193,7 +200,19 @@ class EchoScorer:
                       and self._matches(main_value, pool[main_id])]
         if not references:
             raise ValueError("主词条类型或数值不符合指定 Cost（或任一 Cost）的五星 +25 满级值")
+        if cost is None:
+            candidates = [key for key, pool in self.main_by_cost.items()
+                          if main_id in pool and self._matches(main_value, pool[main_id])]
+            signatures = {(self.main_weights_by_cost[key][main_id],
+                           tuple((name, value, self.minor_weights_by_cost[key][name])
+                                 for name, value in self.minor_by_cost[key].items()))
+                          for key in candidates}
+            if len(signatures) != 1:
+                raise ValueError("主词条匹配多个 Cost，主词条或小词条贡献无法唯一确定，请提供 cost")
+            cost = int(candidates[0])
         main = self._contribution("main_stats", main_id, references[0], references[0], cost)
+        minor_id, minor_value = next(iter(self.minor_by_cost[str(cost)].items()))
+        minor = self._contribution("minor_stats", minor_id, minor_value, minor_value, cost)
         entries = echo["sub_stats"]
         max_count = self.stats["sub_stats"]["max_count"]
         if not isinstance(entries, list) or not 0 <= len(entries) <= max_count:
@@ -216,9 +235,10 @@ class EchoScorer:
             subs.append(self._contribution("sub_stats", stat_id, matched, reference))
             raw_sub_scores.append(self.stat_score("sub_stats", stat_id, matched))
         main_score = self.stat_score("main_stats", main_id, references[0], cost)
+        minor_score = self.stat_score("minor_stats", minor_id, minor_value, cost)
         try:
             sub_score = math.fsum(raw_sub_scores)
-            total = math.fsum([main_score, sub_score])
+            total = math.fsum([main_score, minor_score, sub_score])
         except OverflowError as exc:
             raise ValueError("权重过大，评分超出有限数值范围") from exc
         if not math.isfinite(total):
@@ -226,6 +246,9 @@ class EchoScorer:
         return {
             "score": round(total, 6),
             "main_score": round(main_score, 6),
+            "minor_score": round(minor_score, 6),
+            "minor_stat": minor,
+            "cost": cost,
             "sub_score": round(sub_score, 6),
             "activated_count": len(subs),
             "main_stat": main,

@@ -17,7 +17,9 @@ class EchoScorerTests(unittest.TestCase):
 
     def raw_maximum(self, weights=None):
         weights = self.weights if weights is None else weights
-        main = max(value * weights["main_stats"][cost][name]
+        main = max(value * weights["main_stats"][cost][name] + sum(
+               minor_value * weights.get("minor_stats", {}).get(cost, {}).get(minor_id, 0)
+               for minor_id, minor_value in self.stats["minor_stats"]["max_values_by_cost"][cost].items())
                for cost, pool in self.stats["main_stats"]["max_values_by_cost"].items()
                    for name, value in pool.items())
         subs = sorted((max(tier["values"]) * weights["sub_stats"][name]
@@ -39,8 +41,14 @@ class EchoScorerTests(unittest.TestCase):
                 weight = weights[category][name]
             return entry["value"] * weight / maximum * 50 if maximum else 0
         main_score = contribution("main_stats", echo["main_stat"])
+        main_name = names.get(echo["main_stat"]["name"], echo["main_stat"]["name"])
+        cost = str(echo["cost"]) if "cost" in echo else next(
+            key for key, pool in self.scorer.main_by_cost.items() if pool.get(main_name) == echo["main_stat"]["value"])
+        minor_score = sum(value * weights.get("minor_stats", {}).get(cost, {}).get(name, 0)
+                          for name, value in self.stats["minor_stats"]["max_values_by_cost"][cost].items())
+        minor_score = minor_score / maximum * 50 if maximum else 0
         sub_score = math.fsum(contribution("sub_stats", item) for item in echo["sub_stats"])
-        return round(main_score + sub_score, 6), round(main_score, 6), round(sub_score, 6)
+        return round(main_score + minor_score + sub_score, 6), round(main_score, 6), round(sub_score, 6)
 
     def test_full_echo(self):
         result = self.scorer.score(self.echo)
@@ -101,7 +109,9 @@ class EchoScorerTests(unittest.TestCase):
 
     def test_best_echo_is_aligned_to_fifty(self):
         _, cost, name, value = max(
-            (value * self.weights["main_stats"][cost][name], cost, name, value)
+            (value * self.weights["main_stats"][cost][name] + sum(
+                minor_value * self.weights["minor_stats"][cost][minor_id]
+                for minor_id, minor_value in self.scorer.minor_by_cost[cost].items()), cost, name, value)
             for cost, pool in self.scorer.main_by_cost.items() for name, value in pool.items())
         best_subs = sorted(self.scorer.tiers,
                            key=lambda name: max(self.scorer.tiers[name]["values"]) *
@@ -119,6 +129,9 @@ class EchoScorerTests(unittest.TestCase):
         for cost, pool in self.weights["main_stats"].items():
             zero["main_stats"][cost] = dict.fromkeys(pool, 0)
             scaled["main_stats"][cost] = {name: value * 3 for name, value in pool.items()}
+        for cost, pool in self.weights["minor_stats"].items():
+            zero["minor_stats"][cost] = dict.fromkeys(pool, 0)
+            scaled["minor_stats"][cost] = {name: value * 3 for name, value in pool.items()}
         scorer = EchoScorer(self.stats, zero)
         self.assertEqual(scorer.unaligned_max_score, 0)
         self.assertEqual(scorer.aligned_max_score, 0)
@@ -128,6 +141,7 @@ class EchoScorerTests(unittest.TestCase):
 
     def test_maximum_ranks_value_times_weight_not_weight(self):
         weights = copy.deepcopy(self.weights)
+        weights.pop("minor_stats")
         weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
         for cost, pool in weights["main_stats"].items():
             weights["main_stats"][cost] = dict.fromkeys(pool, 0)
@@ -181,6 +195,25 @@ class EchoScorerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 EchoScorer(self.stats, weights)
 
+    def test_minor_scores_and_same_cost_maximum(self):
+        weights = copy.deepcopy(self.weights)
+        weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+        weights["main_stats"] = {cost: dict.fromkeys(pool, 0) for cost, pool in self.scorer.main_by_cost.items()}
+        weights["minor_stats"] = {"1": {"hp_flat": .1}, "3": {"atk_flat": .5}, "4": {"atk_flat": 1}}
+        weights["main_stats"]["4"]["crit_rate"] = 5
+        scorer = EchoScorer(self.stats, weights)
+        # Cost1基础228，Cost4基础110+150=260；不能误算110+228。
+        self.assertEqual(scorer.unaligned_max_score, 260)
+        for cost, name, value, minor_value, weight in [(1, "atk_pct", 18, 2280, .1),
+                                                       (3, "atk_pct", 30, 100, .5),
+                                                       (4, "crit_rate", 22, 150, 1)]:
+            echo = {"cost": cost, "main_stat": {"name": name, "value": value}, "sub_stats": []}
+            result = scorer.score(echo)
+            self.assertEqual(result["minor_stat"]["value"], minor_value)
+            self.assertEqual(result["minor_score"], round(minor_value * weight / 260 * 50, 6))
+            self.assertAlmostEqual(result["score"], result["main_score"] + result["minor_score"], places=5)
+        self.assertEqual(result["score"], 50)
+
     def test_minor_weight_validation_and_legacy_default(self):
         self.assertEqual(set(self.weights["minor_stats"]), {"1", "3", "4"})
         for cost, name in [("4", "atk_flat"), ("3", "atk_flat"), ("1", "hp_flat")]:
@@ -193,8 +226,8 @@ class EchoScorerTests(unittest.TestCase):
         legacy = copy.deepcopy(self.weights)
         del legacy["minor_stats"]
         scorer = EchoScorer(self.stats, legacy)
-        self.assertEqual(scorer.minor_weights_by_cost, self.weights["minor_stats"])
-        self.assertEqual(scorer.score(self.echo), self.scorer.score(self.echo))
+        self.assertTrue(all(value == 0 for pool in scorer.minor_weights_by_cost.values() for value in pool.values()))
+        self.assertEqual(scorer.score(self.echo)["minor_score"], 0)
         invalid = copy.deepcopy(self.weights)
         invalid["minor_stats"]["4"]["hp_flat"] = 1
         with self.assertRaises(ValueError):
@@ -202,6 +235,7 @@ class EchoScorerTests(unittest.TestCase):
 
     def test_cost_specific_weights_and_global_maximum(self):
         weights = copy.deepcopy(self.weights)
+        weights.pop("minor_stats")
         weights["main_stats"] = copy.deepcopy(self.scorer.main_weights_by_cost)
         for pool in weights["main_stats"].values():
             for name in pool:

@@ -10,7 +10,7 @@ from threading import Event
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
@@ -52,6 +52,37 @@ class ManualWeightInput(QDoubleSpinBox):
 
     def stepBy(self, steps: int) -> None:
         pass
+
+
+class ScoreProgressBar(QProgressBar):
+    """固定 0～50 分刻度；目标线独立于当前分数与推荐颜色。"""
+
+    MAX_SCORE = 50
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setRange(0, 1000)
+        self.setTextVisible(False)
+        self.setFixedHeight(18)
+        self.target_score = 0.0
+        self.target_marker = QWidget(self)
+        self.target_marker.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.target_marker.setStyleSheet("background: #243247; border: none;")
+
+    def set_target_score(self, target: float) -> None:
+        self.target_score = target
+        self.setToolTip(f"目标分数：{target:g} 分 · 深色竖线标记目标 · 刻度 0～50 分")
+        self._position_marker()
+
+    def _position_marker(self) -> None:
+        ratio = min(1.0, max(0.0, self.target_score / self.MAX_SCORE))
+        self.target_marker.setGeometry(round(max(0, self.width() - 2) * ratio),
+                                       0, 2, self.height())
+        self.target_marker.raise_()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._position_marker()
 
 
 class StrategySignals(QObject):
@@ -108,6 +139,7 @@ class EchoWindow(QMainWindow):
         self._strategy_pending = None
         self._strategy_task = None
         self._strategy_cache: dict[str, Any] = {}
+        self._score_result: dict[str, Any] | None = None
         self._strategy_cancelled = Event()
         self._strategy_pool = QThreadPool(self)
         self._strategy_pool.setMaxThreadCount(1)
@@ -133,7 +165,7 @@ class EchoWindow(QMainWindow):
         title = QLabel("声骸评分工作台")
         title.setObjectName("title")
         layout.addWidget(title)
-        subtitle = QLabel("五星 +25 · 手动权重 · 实时评分（不计固定小词条）")
+        subtitle = QLabel("五星 +25 · 手动权重 · 主词条、小词条与副词条实时评分")
         subtitle.setObjectName("muted")
         layout.addWidget(subtitle)
         layout.addWidget(self._weights_panel())
@@ -142,8 +174,6 @@ class EchoWindow(QMainWindow):
         scroll.setWidget(canvas)
         self.setCentralWidget(scroll)
         self._refresh_main()
-        first_sub_stat = next(iter(self.stats["sub_stats"]["tiers"]))
-        self.sub_stat_buttons[first_sub_stat].setChecked(True)
         self.updating = False
         self.calculate()
 
@@ -205,7 +235,7 @@ class EchoWindow(QMainWindow):
                 table.setRowHeight(row, 40)
                 self.weight_inputs[category][stat_id] = box
                 if category == "minor_stats":
-                    box.setToolTip("小词条预设权重：当前仅保存，不参与评分。")
+                    box.setToolTip("按当前 Cost 的固定满级数值计分，不占副词条槽位。")
             tabs.addTab(table, title)
         layout.addWidget(tabs)
         return group
@@ -233,6 +263,11 @@ class EchoWindow(QMainWindow):
         header.addWidget(QLabel("满级主词条"), 1, 0)
         header.addWidget(self.main_stat, 1, 1)
         header.addWidget(self.main_value, 1, 2, 1, 2)
+        self.minor_stat_label = QLabel()
+        self.minor_value = QLabel()
+        header.addWidget(QLabel("固定小词条"), 2, 0)
+        header.addWidget(self.minor_stat_label, 2, 1)
+        header.addWidget(self.minor_value, 2, 2, 1, 2)
         layout.addLayout(header)
 
         options = QGridLayout()
@@ -287,9 +322,9 @@ class EchoWindow(QMainWindow):
         toolbar.addWidget(self.target)
         self.theoretical_max_label = QLabel("理论最高分：—")
         self.theoretical_max_label.setToolTip(
-            "未对齐最高分 = 所有 Cost 中最大的主词条数值 × 权重，"
+            "未对齐最高分 = 所有 Cost 中最大的主词条与固定小词条原始贡献之和，"
             "加上贡献最高的 5 种不同满档副词条；对齐后最高 50 分。"
-            "不受当前词条选择限制，不计固定小词条；全零权重时为 0 分。")
+            "主词条与小词条按同一 Cost 配对，不受当前选择限制；全零权重时为 0 分。")
         toolbar.addWidget(self.theoretical_max_label)
         toolbar.addStretch()
         button = QPushButton("计算评分")
@@ -297,6 +332,34 @@ class EchoWindow(QMainWindow):
         button.clicked.connect(self.calculate)
         toolbar.addWidget(button)
         layout.addLayout(toolbar)
+        row = QHBoxLayout()
+        self.score_label = QLabel("—")
+        self.score_label.setObjectName("score")
+        row.addWidget(self.score_label)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        row.addWidget(self.summary, 1)
+        layout.addLayout(row)
+        self.progress_status = QLabel("推荐计算中")
+        layout.addWidget(self.progress_status)
+        self.progress = ScoreProgressBar()
+        layout.addWidget(self.progress)
+        scale = QHBoxLayout()
+        scale.addWidget(QLabel("0 分"))
+        scale.addStretch()
+        self.progress_target_label = QLabel()
+        scale.addWidget(self.progress_target_label)
+        scale.addStretch()
+        scale.addWidget(QLabel("50 分"))
+        layout.addLayout(scale)
+        self.details = QTableWidget(0, 5)
+        self.details.setHorizontalHeaderLabels(["分类", "词条", "数值", "权重", "贡献分"])
+        self.details.verticalHeader().hide()
+        self.details.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.details.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.details.setMinimumHeight(170)
+        self.details.setMaximumHeight(210)
+        layout.addWidget(self.details)
         parameters = QGridLayout()
         self.strategy_inputs: dict[str, QDoubleSpinBox] = {}
         for index, (name, text, default, maximum) in enumerate([
@@ -316,26 +379,6 @@ class EchoWindow(QMainWindow):
             parameters.addWidget(QLabel(text), row_index, column * 2)
             parameters.addWidget(box, row_index, column * 2 + 1)
         layout.addLayout(parameters)
-        row = QHBoxLayout()
-        self.score_label = QLabel("—")
-        self.score_label.setObjectName("score")
-        row.addWidget(self.score_label)
-        self.summary = QLabel()
-        self.summary.setWordWrap(True)
-        row.addWidget(self.summary, 1)
-        layout.addLayout(row)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1000)
-        self.progress.setTextVisible(False)
-        layout.addWidget(self.progress)
-        self.details = QTableWidget(0, 5)
-        self.details.setHorizontalHeaderLabels(["分类", "词条", "数值", "权重", "贡献分"])
-        self.details.verticalHeader().hide()
-        self.details.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.details.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.details.setMinimumHeight(170)
-        self.details.setMaximumHeight(210)
-        layout.addWidget(self.details)
         self.strategy_status = QLabel("策略等待计算")
         self.strategy_status.setWordWrap(True)
         self.strategy_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -381,6 +424,10 @@ class EchoWindow(QMainWindow):
         stat_id = self.main_stat.currentData()
         value = self.stats["main_stats"]["max_values_by_cost"][str(self.cost.currentData())][stat_id]
         self.main_value.setText(f"+25 满级值：{self._format_value(stat_id, value)}")
+        minor_id, minor_value = next(iter(
+            self.stats["minor_stats"]["max_values_by_cost"][str(self.cost.currentData())].items()))
+        self.minor_stat_label.setText(self.stats["stat_definitions"][minor_id]["name_zh"])
+        self.minor_value.setText(f"+25 固定值：{self._format_value(minor_id, minor_value)}")
         self.calculate()
 
     def _toggle_sub_stat(self, stat_id: str, checked: bool) -> None:
@@ -448,6 +495,9 @@ class EchoWindow(QMainWindow):
         self._strategy_timer.stop()
         self.zero_strategy.setText("—")
         self.current_strategy.setText("—")
+        self._score_result = None
+        self.progress.set_target_score(self.target.value())
+        self.progress_target_label.setText(f"│ 目标 {self.target.value():g} 分")
         try:
             scorer = EchoScorer(self.stats, weights)
             self.theoretical_max_label.setText(
@@ -460,15 +510,19 @@ class EchoWindow(QMainWindow):
             self.summary.setText(f"输入有误：{exc}")
             self.details.setRowCount(0)
             self.progress.setValue(0)
+            self._update_progress_status(unavailable="输入有误")
             self.strategy_status.setText("策略输入无效")
             return
+        self._score_result = result
         score, target = result["score"], self.target.value()
         self.score_label.setText(f"{score:g} 分")
         status = f"已达目标 · 超出 {score - target:g} 分" if score >= target else f"未达目标 · 还差 {target - score:g} 分"
         self.summary.setText(f"{status}\n主词条 {result['main_score']:g} 分 + 副词条 {result['sub_score']:g} 分"
+                             f" + 小词条 {result['minor_score']:g} 分"
                              f" · 已激活 {result['activated_count']}/5")
-        self.progress.setValue(1000 if target == 0 else min(1000, int(score / target * 1000)))
-        entries = [("主词条", result["main_stat"])] + [("副词条", item) for item in result["sub_stats"]]
+        self.progress.setValue(min(1000, int(score / self.progress.MAX_SCORE * 1000)))
+        self._update_progress_status()
+        entries = [("主词条", result["main_stat"]), ("小词条", result["minor_stat"])] + [("副词条", item) for item in result["sub_stats"]]
         self.details.setRowCount(len(entries))
         for row, (category, item) in enumerate(entries):
             values = [category, item["name"], self._format_value(item["stat_id"], item["value"]),
@@ -484,6 +538,22 @@ class EchoWindow(QMainWindow):
         }))
         self.strategy_status.setText("策略等待后台计算（评分已更新）")
         self._strategy_timer.start()
+
+    def _update_progress_status(self, current: dict[str, Any] | None = None,
+                                *, unavailable: str = "推荐计算中") -> None:
+        result = self._score_result
+        if result is not None and result["score"] >= self.target.value():
+            text, color = "达成目标", "#16a34a"
+        elif result is not None and result["activated_count"] == 5:
+            text, color = "下次好运", "#dc2626"
+        elif result is not None and current is not None:
+            text, color = (("推荐继续", "#16a34a") if current["recommend_continue"]
+                           else ("推荐放弃", "#dc2626"))
+        else:
+            text, color = unavailable, "#94a3b8"
+        self.progress_status.setText(text)
+        self.progress_status.setStyleSheet(f"color: {color}; font-weight: 700;")
+        self.progress.setStyleSheet(f"QProgressBar::chunk {{ background: {color}; border-radius: 5px; }}")
 
     @Slot()
     def _start_strategy(self) -> None:
@@ -504,11 +574,13 @@ class EchoWindow(QMainWindow):
         self._strategy_task = None
         if version == self._strategy_version:
             if error:
+                self._update_progress_status(unavailable="推荐暂不可用")
                 self.strategy_status.setText(f"策略计算失败（不影响评分）：{error}")
             elif result is not None:
                 try:
                     self._display_strategy(result)
                 except (KeyError, TypeError, ValueError) as exc:
+                    self._update_progress_status(unavailable="推荐暂不可用")
                     self.strategy_status.setText(f"策略结果格式有误：{exc}")
         # 防抖已到期则消费最新快照；否则继续等定时器，不排队旧输入。
         if self._strategy_pending is not None and not self._strategy_timer.isActive():
@@ -537,6 +609,7 @@ class EchoWindow(QMainWindow):
         self.zero_strategy.setText(zero_text)
         self.current_strategy.setText(current_text)
         self.strategy_status.setText(status)
+        self._update_progress_status(current)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closing = True
