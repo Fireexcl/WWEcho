@@ -250,7 +250,7 @@ class EchoGuiTests(unittest.TestCase):
         expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
         self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.window.target.stepUp()
-        self.assertEqual(self.window.target.value(), 41)
+        self.assertEqual(self.window.target.value(), 31)
 
     def test_minor_weights_tab_roundtrip_restore_and_old_preset(self):
         table = self.window.weight_tabs.widget(4)
@@ -464,7 +464,8 @@ class EchoGuiTests(unittest.TestCase):
         self.wait_until(lambda: "count=5" in self.window.current_strategy.text())
 
     def test_strategy_defaults_ranges_manual_input_and_parameter_forwarding(self):
-        expected = {"recovery": (.66, 1), "threshold": (20, 100),
+        self.assertEqual(self.window.target.value(), 30)
+        expected = {"recovery": (.66, 1), "threshold": (5, 100),
                     "tuning_weight": (1, 1_000_000), "experience_weight": (1, 1_000_000),
                     "embryo_weight": (1, 1_000_000)}
         for name, (value, maximum) in expected.items():
@@ -536,7 +537,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.progress_status.text(), "推荐放弃")
         self.assertEqual(len(ControlledPlanner.calls), 2)
         self.assertEqual(ControlledPlanner.max_active, 1)
-        self.assertEqual([planner.target for planner in ControlledPlanner.instances], [40, 85])
+        self.assertEqual([planner.target for planner in ControlledPlanner.instances], [30, 85])
 
     def test_debounce_and_planner_cache_reused_for_new_echo(self):
         for value in (81, 82, 83):

@@ -317,7 +317,7 @@ class EchoWindow(QMainWindow):
         layout = QVBoxLayout(group)
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("目标分数"))
-        self.target = self._number(40)
+        self.target = self._number(30)
         self.target.valueChanged.connect(self.calculate)
         toolbar.addWidget(self.target)
         self.theoretical_max_label = QLabel("理论最高分：—")
@@ -367,7 +367,7 @@ class EchoWindow(QMainWindow):
             ("tuning_weight", "调谐权重", 1, 1_000_000),
             ("experience_weight", "经验权重", 1, 1_000_000),
             ("embryo_weight", "胚子权重", 1, 1_000_000),
-            ("threshold", "赌词条阈值", 20, 100),
+            ("threshold", "赌词条阈值", 5, 100),
         ]):
             box = self._number(default, manual_only=True)
             box.setMaximum(maximum)

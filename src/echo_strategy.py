@@ -27,7 +27,7 @@ class ActivationPlanner:
     """
 
     def __init__(self, scorer: EchoScorer, costs: dict[str, Any], target: float, *,
-                 recovery: float = .66, threshold: float = .2,
+                 recovery: float = .66, threshold: float = .05,
                  tuning_weight: float = 1, experience_weight: float = 1,
                  embryo_weight: float = 1, bins: int = 1000) -> None:
         self.scorer = scorer
