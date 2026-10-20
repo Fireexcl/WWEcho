@@ -367,12 +367,9 @@ class EchoWindow(QMainWindow):
             ("tuning_weight", "调谐权重", 1, 1_000_000),
             ("experience_weight", "经验权重", 1, 1_000_000),
             ("embryo_weight", "胚子权重", 1, 1_000_000),
-            ("threshold", "赌词条阈值", 5, 100),
         ]):
             box = self._number(default, manual_only=True)
             box.setMaximum(maximum)
-            if name == "threshold":
-                box.setSuffix(" %")
             box.valueChanged.connect(self.calculate)
             self.strategy_inputs[name] = box
             row_index, column = divmod(index, 2)
@@ -394,8 +391,8 @@ class EchoWindow(QMainWindow):
             panel_layout.addWidget(label)
             layout.addWidget(panel)
         self.result_hint = QLabel(
-            "分数网格近似：完整激活概率区间与阈值策略成功率（近似）不是同一指标。"
-            "当前推荐依据完整激活概率下界与赌词条阈值，不是成本最优。"
+            "分数网格近似：当前完整激活概率下界与 0 词条基准比较；达到或超过基准且下界大于 0 才推荐继续。"
+            "相对基准策略成功率（近似）与完整激活概率不是同一指标，推荐不是成本最优。"
             "材料成本为占位；回收仅作用于失败经验，调谐和胚子无回收。"
             "从零成本包含反复尝试至成功的总加权净成本；胚子期望为 1/p。"
             "分数不是伤害提升百分比。")
@@ -530,7 +527,6 @@ class EchoWindow(QMainWindow):
             for col, value in enumerate(values):
                 self.details.setItem(row, col, QTableWidgetItem(value))
         params = {name: box.value() for name, box in self.strategy_inputs.items()}
-        params["threshold"] /= 100
         params["bins"] = 1000
         self._strategy_pending = (self._strategy_version, deepcopy({
             "stats": self.stats, "weights": self.current_weights(),
@@ -588,9 +584,9 @@ class EchoWindow(QMainWindow):
 
     def _display_strategy(self, result: dict[str, Any]) -> None:
         def interval(item: dict[str, Any]) -> str:
-            return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
+                return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
                     f"{item['full_success_upper']:.2%}\n"
-                    f"阈值策略成功率（近似）：{item['success_probability']:.2%}")
+                    f"相对基准策略成功率（近似）：{item['success_probability']:.2%}")
 
         def amount(value: Any) -> str:
             return "无法获得 / ∞" if value is None else f"{value:,.4g}"
@@ -602,7 +598,9 @@ class EchoWindow(QMainWindow):
                      f" · 调谐：{amount(zero['expected_tuning'])}"
                      f" · 净经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
-        current_text = (interval(current) + f"\n{recommendation}（基于下界阈值，非成本最优）"
+        current_text = (interval(current)
+                + f"\n0 词条达标概率下界基准：{current['baseline_success_lower']:.2%}"
+                + f"\n{recommendation}（与同类新胚子比较，非成本最优）"
                         f"\n原因：{current['reason']}"
                         f"\n后续加权净成本：{amount(current['future_cost'])}")
         status = f"策略已更新 · 分数网格近似步长 {result['score_resolution']:g} · {result['method']}"

@@ -1,4 +1,4 @@
-"""不放回词条模型的分数网格 DP；概率上下界与阈值策略成本。"""
+"""不放回词条模型的分数网格 DP；概率上下界与相对基准策略成本。"""
 
 from __future__ import annotations
 
@@ -23,19 +23,18 @@ class ActivationPlanner:
     """下取整增分保守决策，上取整增分提供完整激活概率上界。
 
     重复尝试假定胚子主词条已筛选相同、抽样独立且成本固定。
-    成本不影响推荐；推荐仅由完整激活概率下界和用户阈值决定。
+    推荐以相同主词条、Cost、权重和目标下的 0 词条达标概率下界为基准。
     """
 
     def __init__(self, scorer: EchoScorer, costs: dict[str, Any], target: float, *,
-                 recovery: float = .66, threshold: float = .05,
+                 recovery: float = .66,
                  tuning_weight: float = 1, experience_weight: float = 1,
                  embryo_weight: float = 1, bins: int = 1000) -> None:
         self.scorer = scorer
         self.target = nonnegative(target, "目标分数")
         self.recovery = nonnegative(recovery, "回收系数")
-        self.threshold = nonnegative(threshold, "赌词条阈值")
-        if self.recovery > 1 or self.threshold > 1:
-            raise ValueError("回收系数和阈值必须在 0～1 之间")
+        if self.recovery > 1:
+            raise ValueError("回收系数必须在 0～1 之间")
         if type(bins) is not int or not 10 <= bins <= 10000:
             raise ValueError("bins 必须是 10～10000 的整数")
         self.bins = bins
@@ -81,6 +80,7 @@ class ActivationPlanner:
         self.lower_cache: dict[int, Any] = {}
         self.upper_cache: dict[int, Any] = {}
         self.policy_cache: dict[int, Any] = {}
+        self.baseline_probability = 0.0
         self.index = np.arange(self.bins + 1)
         self.success = (self.index == self.bins).astype(float)
         self.quantized = []
@@ -129,7 +129,7 @@ class ActivationPlanner:
         if n == self.limit:
             return probability, tuning, experience
         full = self._full(mask)
-        active = (full >= self.threshold) & (full > 0) & (self.index < self.bins)
+        active = (full >= self.baseline_probability) & (full > 0) & (self.index < self.bins)
         if np.any(active):
             next_p = np.zeros(self.bins + 1)
             next_t = np.full(self.bins + 1, self.tuning[n])
@@ -175,10 +175,13 @@ class ActivationPlanner:
                         attempt_cost=self.ew * self.embryo, expected_cost=self.ew * self.embryo,
                         expected_embryos=1., expected_tuning=0., expected_experience=0.)
             current = dict(full_success_lower=1., full_success_upper=1., success_probability=1.,
-                           recommend_continue=False, reason="目标已达成，无需继续", future_cost=0.)
+                           baseline_success_lower=1., recommend_continue=False,
+                           reason="目标已达成，无需继续", future_cost=0.)
         else:
             lower = self._full(0)
             upper = self._full(0, True)
+            baseline = float(lower[0])
+            self.baseline_probability = baseline
             p, t, x = self._policy(0)
             chance = float(p[0])
             attempt = self.ew * self.embryo + self.tw * float(t[0]) + self.xw * float(x[0])
@@ -190,21 +193,25 @@ class ActivationPlanner:
                         expected_experience=float(x[0]) / chance if chance > 0 else None)
             full_lo, full_hi = float(self._full(mask)[lo]), float(self._full(mask, True)[hi])
             cp, ct, cx = self._policy(mask)
-            recommend = not reached and len(raw) < self.limit and full_lo > 0 and full_lo >= self.threshold
+            recommend = (not reached and len(raw) < self.limit
+                         and full_lo > 0 and full_lo >= baseline)
             if reached:
                 reason = "目标已达成，无需继续"
             elif len(raw) == self.limit:
                 reason = "槽位已满，无法继续"
             elif full_hi == 0:
                 reason = "剩余槽位无法达到目标，放弃"
-            elif full_lo == 0 or full_lo < self.threshold:
-                reason = "保守成功率低于赌词条阈值，放弃（区间跨阈值时也保守停止）"
+            elif full_lo == 0:
+                reason = "分数网格下界未确认正达标概率，保守停止"
+            elif full_lo < baseline:
+                reason = "当前保守达标概率低于 0 词条基准，放弃"
             else:
-                reason = "成功率达到赌词条阈值，推荐继续并逐条重评"
+                reason = "当前保守达标概率不低于 0 词条基准，推荐继续并逐条重评"
             current = dict(full_success_lower=1. if reached else full_lo,
                            full_success_upper=1. if reached else full_hi,
                            success_probability=1. if reached else float(cp[lo]),
+                           baseline_success_lower=baseline,
                            recommend_continue=recommend, reason=reason,
                            future_cost=0. if reached else self.tw * float(ct[lo]) + self.xw * float(cx[lo]))
         return dict(zero=zero, current=current, score_resolution=self.resolution,
-                    method="分数网格上下界 DP；下界阈值策略近似；失败仅回收经验")
+                    method="分数网格上下界 DP；0 词条基准策略近似；失败仅回收经验")

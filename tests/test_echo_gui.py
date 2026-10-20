@@ -30,7 +30,7 @@ def strategy_result(reason="fake", *, unavailable=False):
                  "expected_experience": None if unavailable else 10},
         "current": {"full_success_lower": .1, "full_success_upper": .2,
                     "success_probability": .05, "recommend_continue": False,
-                    "reason": reason, "future_cost": 3},
+                    "baseline_success_lower": .3, "reason": reason, "future_cost": 3},
         "score_resolution": .1, "method": "fake-grid",
     }
 
@@ -465,7 +465,7 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_strategy_defaults_ranges_manual_input_and_parameter_forwarding(self):
         self.assertEqual(self.window.target.value(), 30)
-        expected = {"recovery": (.66, 1), "threshold": (5, 100),
+        expected = {"recovery": (.66, 1),
                     "tuning_weight": (1, 1_000_000), "experience_weight": (1, 1_000_000),
                     "embryo_weight": (1, 1_000_000)}
         for name, (value, maximum) in expected.items():
@@ -478,13 +478,13 @@ class EchoGuiTests(unittest.TestCase):
         recovery.selectAll()
         QTest.keyClicks(recovery, "0.75")
         QTest.keyClick(recovery, Qt.Key.Key_Return)
-        for name, value in [("threshold", 35), ("tuning_weight", 2),
+        for name, value in [("tuning_weight", 2),
                             ("experience_weight", 3), ("embryo_weight", 4)]:
             self.window.strategy_inputs[name].setValue(value)
         self.window.target.setValue(87)
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         planner = ControlledPlanner.instances[-1]
-        self.assertEqual(planner.params, {"recovery": .75, "threshold": .35,
+        self.assertEqual(planner.params, {"recovery": .75,
                                          "tuning_weight": 2, "experience_weight": 3,
                                          "embryo_weight": 4, "bins": 1000})
         self.assertEqual(planner.target, 87)
@@ -560,13 +560,14 @@ class EchoGuiTests(unittest.TestCase):
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         for label in (self.window.zero_strategy, self.window.current_strategy):
             self.assertIn("完整激活概率区间", label.text())
-            self.assertIn("阈值策略成功率（近似）", label.text())
+            self.assertIn("相对基准策略成功率（近似）", label.text())
         self.assertIn("30.00% ～ 40.00%", self.window.zero_strategy.text())
         self.assertIn("25.00%", self.window.zero_strategy.text())
         self.assertEqual(self.window.zero_strategy.text().count("无法获得 / ∞"), 4)
         self.assertIn("建议停止", self.window.current_strategy.text())
+        self.assertIn("0 词条达标概率下界基准", self.window.current_strategy.text())
         self.assertIn("非成本最优", self.window.current_strategy.text())
-        for text in ("分数网格近似", "占位", "失败经验", "调谐和胚子无回收"):
+        for text in ("分数网格近似", "0 词条基准", "占位", "失败经验", "调谐和胚子无回收"):
             self.assertIn(text, self.window.result_hint.text())
 
     def test_strategy_error_is_visible_without_affecting_scoring(self):
@@ -577,21 +578,16 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
         self.assertEqual(self.window.zero_strategy.text(), "—")
 
-    def test_parameter_boundaries_zero_weights_and_threshold_one(self):
+    def test_parameter_boundaries_and_zero_cost_weights(self):
         for box in self.window.strategy_inputs.values():
             box.setValue(-1)
             self.assertEqual(box.value(), 0)
         self.window.strategy_inputs["recovery"].setValue(2)
-        self.window.strategy_inputs["threshold"].setValue(101)
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         self.assertEqual(ControlledPlanner.instances[-1].params, {
-            "recovery": 1, "threshold": 1, "tuning_weight": 0,
+            "recovery": 1, "tuning_weight": 0,
             "experience_weight": 0, "embryo_weight": 0, "bins": 1000,
         })
-        self.window.strategy_inputs["threshold"].setValue(0)
-        self.wait_until(lambda: len(ControlledPlanner.instances) == 2 and
-                        "策略已更新" in self.window.strategy_status.text())
-        self.assertEqual(ControlledPlanner.instances[-1].params["threshold"], 0)
 
     def test_stale_error_and_invalid_input_do_not_restore_old_result(self):
         ControlledPlanner.gate.clear()
@@ -664,7 +660,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
         def interval(item):
             return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
                     f"{item['full_success_upper']:.2%}\n"
-                    f"阈值策略成功率（近似）：{item['success_probability']:.2%}")
+                    f"相对基准策略成功率（近似）：{item['success_probability']:.2%}")
 
         zero, current = result["zero"], result["current"]
         self.assertEqual(window.zero_strategy.text(), interval(zero) +
@@ -675,7 +671,8 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                          f" · 净经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
         self.assertEqual(window.current_strategy.text(), interval(current) +
-                         f"\n{recommendation}（基于下界阈值，非成本最优）"
+                         f"\n0 词条达标概率下界基准：{current['baseline_success_lower']:.2%}"
+                         f"\n{recommendation}（与同类新胚子比较，非成本最优）"
                          f"\n原因：{current['reason']}"
                          f"\n后续加权净成本：{amount(current['future_cost'])}")
         self.assertEqual(window.strategy_status.text(),
@@ -754,7 +751,6 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                     try:
                         window.main_stat.setCurrentIndex(window.main_stat.findData("crit_rate"))
                         window.target.setValue(target)
-                        window.strategy_inputs["threshold"].setValue(0)
                         self.wait_for_strategy(window)
                         self.assertEqual(len(builds), 1)
                         self.assertEqual(builds[0][1]["bins"], 1000)

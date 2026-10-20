@@ -50,19 +50,22 @@ class StrategyTests(unittest.TestCase):
         self.assertIsNone(result["zero"]["expected_cost"])
         self.assertFalse(result["current"]["recommend_continue"])
 
-    def test_last_slot_official_probability_and_threshold(self):
+    def test_last_slot_official_probability_and_zero_stat_baseline(self):
         self.echo["sub_stats"] = [{"name": "crit_rate", "value": 6.3},
                                    {"name": "atk_pct", "value": 11.6},
                                    {"name": "hp_flat", "value": 320},
                                    {"name": "def_flat", "value": 40}]
-        planner = self.planner(60, threshold=0)
-        current = planner.analyze(self.echo)["current"]
+        planner = self.planner(60)
+        result = planner.analyze(self.echo)
+        current = result["current"]
         expected = (6 / 99.9999) / 9
         self.assertAlmostEqual(current["full_success_lower"], expected)
         self.assertGreaterEqual(current["full_success_upper"], expected)
-        self.assertAlmostEqual(current["success_probability"], expected)
-        self.assertTrue(current["recommend_continue"])
-        self.assertFalse(self.planner(60).analyze(self.echo)["current"]["recommend_continue"])
+        self.assertAlmostEqual(current["baseline_success_lower"],
+                       result["zero"]["full_success_lower"])
+        self.assertEqual(current["recommend_continue"],
+                 current["full_success_lower"] > 0 and
+                 current["full_success_lower"] >= current["baseline_success_lower"])
 
     def test_zero_weight_types_still_drawn_and_cost_recovery(self):
         # 只有暴击率有效，所有档位同分；抽到即成功。
@@ -70,11 +73,11 @@ class StrategyTests(unittest.TestCase):
             self.weights["sub_stats"][name] = 0
         self.weights["sub_stats"]["crit_rate"] = 20 / 10.5
         self.stats["sub_stats"]["tiers"]["crit_rate"]["values"] = [10.5] * 8
-        result = self.planner(30, threshold=0, recovery=.66).analyze(self.echo)["zero"]
-        probability = 5 / 13
-        draws = sum((13 - n) / 13 for n in range(5))
-        failures_exp = 5 * (8 / 13)
-        net_exp = draws - .66 * failures_exp
+        result = self.planner(30, recovery=.66).analyze(self.echo)["zero"]
+        # 0 词条基准为 5/13；首次抽到非暴击率后条件概率降至 4/12，策略停止。
+        probability = 1 / 13
+        draws = 1
+        net_exp = .3907692307692307
         self.assertAlmostEqual(result["success_probability"], probability)
         self.assertAlmostEqual(result["expected_embryos"], 1 / probability)
         self.assertAlmostEqual(result["expected_tuning"], draws / probability)
@@ -83,29 +86,35 @@ class StrategyTests(unittest.TestCase):
         self.assertAlmostEqual(result["expected_cost"], result["attempt_cost"] / probability)
 
     def test_recovery_and_cost_weights_do_not_change_recommendation(self):
-        a = self.planner(40, threshold=0, recovery=0).analyze(self.echo)
-        b = self.planner(40, threshold=0, recovery=1, tuning_weight=2).analyze(self.echo)
+        a = self.planner(40, recovery=0).analyze(self.echo)
+        b = self.planner(40, recovery=1, tuning_weight=2).analyze(self.echo)
         self.assertEqual(a["zero"]["success_probability"], b["zero"]["success_probability"])
         self.assertEqual(a["current"]["recommend_continue"], b["current"]["recommend_continue"])
 
     def test_sub_one_point_target_gap(self):
-        result = self.planner(20.1, threshold=0).analyze(self.echo)
-        self.assertGreater(result["zero"]["success_probability"], .9)
+        result = self.planner(20.1).analyze(self.echo)
+        self.assertGreater(result["zero"]["full_success_lower"], .9)
 
     def test_bounds_and_policy_success(self):
         result = self.planner(60).analyze(self.echo)["zero"]
         self.assertLessEqual(result["full_success_lower"], result["full_success_upper"] + 1e-12)
         self.assertLessEqual(result["success_probability"], result["full_success_lower"] + 1e-12)
 
-    def test_threshold_equality_and_sunk_experience_recovery(self):
+    def test_zero_stat_baseline_and_sunk_experience_recovery(self):
         self.echo["sub_stats"] = [{"name": "hp_flat", "value": 320},
                                    {"name": "def_flat", "value": 40},
                                    {"name": "hp_pct", "value": 6.4},
                                    {"name": "def_pct", "value": 8.1}]
-        base = self.planner(30, threshold=0).analyze(self.echo)["current"]
-        chance = base["full_success_lower"]
-        self.assertTrue(self.planner(30, threshold=chance).analyze(self.echo)["current"]["recommend_continue"])
-        stopped = self.planner(30, threshold=1).analyze(self.echo)["current"]
+        result = self.planner(30).analyze(self.echo)
+        base = result["current"]
+        self.assertLessEqual(result["zero"]["success_probability"], result["zero"]["full_success_lower"] + 1e-12)
+        self.assertEqual(base["recommend_continue"],
+                         base["full_success_lower"] > 0 and
+                         base["full_success_lower"] >= base["baseline_success_lower"])
+        stopped = self.planner(30).analyze({**self.echo, "sub_stats": [
+            {"name": "hp_flat", "value": 320}, {"name": "def_flat", "value": 40},
+            {"name": "hp_pct", "value": 6.4}, {"name": "def_pct", "value": 8.1},
+        ]})["current"]
         self.assertEqual(stopped["success_probability"], 0)
         self.assertAlmostEqual(stopped["future_cost"], -.66 * 4)
 
@@ -114,7 +123,7 @@ class StrategyTests(unittest.TestCase):
                                    {"name": "atk_pct", "value": 7.9},
                                    {"name": "energy_regen", "value": 8.4},
                                    {"name": "hp_flat", "value": 320}]
-        planner = self.planner(60, threshold=0)
+        planner = self.planner(60)
         known = {item["name"] for item in self.echo["sub_stats"]}
         raw = planner.scorer.stat_score("main_stats", "crit_rate", 22) + sum(
                    planner.scorer.stat_score("sub_stats", item["name"], item["value"])
@@ -130,7 +139,7 @@ class StrategyTests(unittest.TestCase):
         self.assertGreaterEqual(result["full_success_upper"], exact - 1e-12)
 
     def test_validation(self):
-        for options in ({"threshold": 1.1}, {"recovery": -1}, {"tuning_weight": True},
+        for options in ({"recovery": -1}, {"tuning_weight": True},
                         {"experience_weight": float("inf")}):
             with self.assertRaises(ValueError):
                 self.planner(80, **options)
