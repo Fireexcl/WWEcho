@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import CancelledError
 from copy import deepcopy
 from pathlib import Path
 from threading import Event
@@ -14,7 +15,7 @@ from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QTabWidget,
+    QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -125,6 +126,38 @@ class StrategyTask(QRunnable):
             self.signals.finished.emit(self.version, result, error)
 
 
+class ReconstructionTask(QRunnable):
+    """频整器独立后台队列，不等待激活策略；支持输入变化时取消。"""
+
+    def __init__(self, version: int, snapshot: dict[str, Any],
+                 cache: dict[str, Any], cancelled: Event) -> None:
+        super().__init__()
+        self.version, self.snapshot = version, snapshot
+        self.cache, self.cancelled = cache, cancelled
+        self.signals = StrategySignals()
+
+    def run(self) -> None:
+        result, error = None, ""
+        try:
+            if self.cancelled.is_set():
+                return
+            from src.echo_reconstruction import ReconstructionPlanner
+
+            data = self.snapshot
+            key = json.dumps({name: data[name] for name in ("stats", "weights")},
+                             sort_keys=True, ensure_ascii=False)
+            if self.cache.get("key") != key:
+                planner = ReconstructionPlanner(EchoScorer(data["stats"], data["weights"]))
+                self.cache.update(key=key, planner=planner)
+            result = self.cache["planner"].analyze(data["echo"], cancelled=self.cancelled)
+        except CancelledError:
+            pass
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.signals.finished.emit(self.version, result, error)
+
+
 class EchoWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -147,6 +180,20 @@ class EchoWindow(QMainWindow):
         self._strategy_timer.setSingleShot(True)
         self._strategy_timer.setInterval(180)
         self._strategy_timer.timeout.connect(self._start_strategy)
+        self._reconstruction_version = 0
+        self._reconstruction_pending = None
+        self._reconstruction_task = None
+        self._reconstruction_cache: dict[str, Any] = {}
+        self._reconstruction_key: str | None = None
+        self._reconstruction_result: dict[str, Any] | None = None
+        self._reconstruction_cancelled = Event()
+        self._reconstruction_pool = QThreadPool(self)
+        self._reconstruction_pool.setMaxThreadCount(1)
+        self._reconstruction_timer = QTimer(self)
+        self._reconstruction_timer.setSingleShot(True)
+        self._reconstruction_timer.setInterval(180)
+        self._reconstruction_timer.timeout.connect(self._start_reconstruction)
+        self.reconstruction_locks: set[str] = set()
         self.weight_inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
         self.sub_stat_buttons: dict[str, QPushButton] = {}
         self.selected_sub_stats: list[str] = []
@@ -171,6 +218,7 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self._weights_panel())
         layout.addWidget(self._stats_panel())
         layout.addWidget(self._results_panel())
+        layout.addWidget(self._reconstruction_panel())
         scroll.setWidget(canvas)
         self.setCentralWidget(scroll)
         self._refresh_main()
@@ -403,6 +451,307 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self.result_hint)
         return group
 
+    def _reconstruction_panel(self) -> QGroupBox:
+        group = QGroupBox("04  频整器消耗计算")
+        layout = QVBoxLayout(group)
+        hint = QLabel("开满五条副词条后可用；点击下方词条锁定属性和档位，锁 1～4 条各消耗 1～4 枚频整器，"
+                      "其余属性及档位全部随机。正提升指严格超过当前原始评分，与区域 3 的目标无关。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        buttons = QGridLayout()
+        self.reconstruction_lock_buttons: list[QPushButton] = []
+        for index in range(5):
+            button = QPushButton(f"词条 {index + 1} · 待开满")
+            button.setCheckable(True)
+            button.setEnabled(False)
+            button.setMinimumHeight(54)
+            button.toggled.connect(
+                lambda checked, position=index: self._toggle_reconstruction_lock(position, checked))
+            self.reconstruction_lock_buttons.append(button)
+            buttons.addWidget(button, index // 3, index % 3)
+        for column in range(3):
+            buttons.setColumnStretch(column, 1)
+        layout.addLayout(buttons)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("比较预算"))
+        self.reconstruction_budget = QSpinBox()
+        self.reconstruction_budget.setRange(0, 10000)
+        self.reconstruction_budget.setValue(4)
+        self.reconstruction_budget.setSuffix(" 枚")
+        self.reconstruction_budget.valueChanged.connect(self._reconstruction_budget_changed)
+        toolbar.addWidget(self.reconstruction_budget)
+        self.clear_reconstruction_locks_button = QPushButton("清空锁定")
+        self.clear_reconstruction_locks_button.clicked.connect(self.clear_reconstruction_locks)
+        toolbar.addWidget(self.clear_reconstruction_locks_button)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        self.reconstruction_status = QLabel("请先在区域 2 开满五条副词条")
+        self.reconstruction_selected = QLabel("勾选 1～4 个词条，查看当前锁法。")
+        self.reconstruction_recommendation = QLabel("—")
+        for label in (self.reconstruction_status, self.reconstruction_selected,
+                      self.reconstruction_recommendation):
+            label.setWordWrap(True)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(label)
+        tabs = QTabWidget()
+        self.reconstruction_tabs = tabs
+
+        def table(headers: list[str]) -> QTableWidget:
+            widget = QTableWidget(0, len(headers))
+            widget.setHorizontalHeaderLabels(headers)
+            widget.verticalHeader().hide()
+            widget.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            widget.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            widget.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+            widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            widget.horizontalHeader().setMinimumSectionSize(80)
+            widget.setMinimumHeight(270)
+            widget.setMaximumHeight(330)
+            return widget
+
+        self.reconstruction_plans_table = table([
+            "锁数", "锁定词条与档位", "正提升概率", "期望Δ分", "成功时平均Δ分",
+            "消耗 / 枚", "正收益 / 枚", "升分期望消耗"])
+        self.reconstruction_plans_table.cellClicked.connect(self._apply_reconstruction_plan)
+        self.reconstruction_budget_table = table([
+            "锁数", "锁定词条与档位", "最多次数 / 消耗", "预算内升分概率", "终态期望Δ分",
+            "期望消耗", "净升分 / 枚", "下次边际Δ分", "下次边际消耗"])
+        self.reconstruction_budget_table.cellClicked.connect(self._apply_reconstruction_budget_plan)
+        tabs.addTab(self.reconstruction_plans_table, "单次 · 全部 30 种锁法（点击套用）")
+        tabs.addTab(self.reconstruction_budget_table, "同预算 · 锁 1～4 条择优与边际收益")
+        layout.addWidget(tabs)
+        self.reconstruction_hint = QLabel(
+            "单次：期望Δ分含降分风险；正收益 = E[max(Δ分, 0)]，不是保底收益；"
+            "成功时平均Δ分为正提升条件均值；升分期望消耗 = 锁数 / 单次升分概率。\n"
+            "同预算：固定原始锁法，独立重复；首次超过原始评分即停，否则保留最后一次结果（不假设可撤销）。"
+            "各锁数按终态期望Δ分择优；性价比 = 终态期望Δ分 / 期望实际消耗。"
+            "下次边际为在当前最多次数上再加洗一次的无条件增量，并非单次收益简单相加。\n"
+            "概率复用归一化官方公示档位，类型不放回；档位和跨次独立为模型约定。"
+            "不含每次看结果后重选锁法的全局最优策略、额外材料或货币；分数不代表伤害提升百分比。")
+        self.reconstruction_hint.setObjectName("muted")
+        self.reconstruction_hint.setWordWrap(True)
+        layout.addWidget(self.reconstruction_hint)
+        return group
+
+    def _sync_reconstruction_buttons(self) -> None:
+        self.reconstruction_locks.intersection_update(self.selected_sub_stats)
+        full = len(self.selected_sub_stats) == 5
+        for index, button in enumerate(self.reconstruction_lock_buttons):
+            button.blockSignals(True)
+            if index < len(self.selected_sub_stats):
+                name = self.selected_sub_stats[index]
+                tier = self.sub_tier_inputs[name]
+                text = (f"{self.stats['stat_definitions'][name]['name_zh']}\n"
+                        f"{tier.currentIndex() + 1}档 · {self._format_value(name, tier.currentData())}")
+                button.setText(text)
+                button.setChecked(name in self.reconstruction_locks)
+            else:
+                button.setText(f"词条 {index + 1} · 待开满")
+                button.setChecked(False)
+            button.setEnabled(full and self._score_result is not None)
+            button.blockSignals(False)
+
+    def _toggle_reconstruction_lock(self, index: int, checked: bool) -> None:
+        if index >= len(self.selected_sub_stats):
+            return
+        name = self.selected_sub_stats[index]
+        if checked and name not in self.reconstruction_locks and len(self.reconstruction_locks) >= 4:
+            button = self.reconstruction_lock_buttons[index]
+            button.blockSignals(True)
+            button.setChecked(False)
+            button.blockSignals(False)
+            self.statusBar().showMessage("频整器最多锁定 4 个副词条，至少保留 1 条可重构", 4000)
+            return
+        if checked:
+            self.reconstruction_locks.add(name)
+        else:
+            self.reconstruction_locks.discard(name)
+        self._display_reconstruction_selection()
+
+    def clear_reconstruction_locks(self) -> None:
+        self.reconstruction_locks.clear()
+        self._sync_reconstruction_buttons()
+        self._display_reconstruction_selection()
+
+    def _invalidate_reconstruction(self, message: str) -> None:
+        self._reconstruction_version += 1
+        self._reconstruction_cancelled.set()
+        self._reconstruction_timer.stop()
+        self._reconstruction_pending = None
+        self._reconstruction_key = None
+        self._reconstruction_result = None
+        self.reconstruction_status.setText(message)
+        self.reconstruction_selected.setText("勾选 1～4 个词条，查看当前锁法。")
+        self.reconstruction_recommendation.setText("—")
+        self.reconstruction_plans_table.setRowCount(0)
+        self.reconstruction_budget_table.setRowCount(0)
+        self._sync_reconstruction_buttons()
+
+    def _queue_reconstruction(self) -> None:
+        self._sync_reconstruction_buttons()
+        if len(self.selected_sub_stats) != 5:
+            self._invalidate_reconstruction("请先在区域 2 开满五条副词条")
+            return
+        data = {"stats": self.stats, "weights": self.current_weights(), "echo": self.current_echo()}
+        key = json.dumps(data, sort_keys=True, ensure_ascii=False)
+        if key == self._reconstruction_key:
+            return
+        self._invalidate_reconstruction("频整器等待后台计算（评分仍可编辑）")
+        self._reconstruction_key = key
+        self._reconstruction_pending = (self._reconstruction_version, deepcopy(data))
+        self._reconstruction_timer.start()
+
+    @Slot()
+    def _start_reconstruction(self) -> None:
+        if self._closing or self._reconstruction_task is not None or self._reconstruction_pending is None:
+            return
+        version, snapshot = self._reconstruction_pending
+        self._reconstruction_pending = None
+        self._reconstruction_cancelled = Event()
+        task = ReconstructionTask(version, snapshot, self._reconstruction_cache,
+                                  self._reconstruction_cancelled)
+        task.signals.finished.connect(self._reconstruction_finished, Qt.ConnectionType.QueuedConnection)
+        self._reconstruction_task = task
+        self.reconstruction_status.setText("频整器后台计算中（评分仍可编辑）")
+        self._reconstruction_pool.start(task)
+
+    @Slot(int, object, str)
+    def _reconstruction_finished(self, version: int, result: Any, error: str) -> None:
+        if self._closing:
+            return
+        self._reconstruction_task = None
+        if version == self._reconstruction_version:
+            if error:
+                self._reconstruction_key = None
+                self.reconstruction_status.setText(f"频整器计算失败（不影响评分）：{error}")
+            elif result is not None:
+                try:
+                    self._display_reconstruction(result)
+                except (KeyError, TypeError, ValueError) as exc:
+                    self._reconstruction_result = None
+                    self.reconstruction_status.setText(f"频整器结果格式有误：{exc}")
+        if self._reconstruction_pending is not None and not self._reconstruction_timer.isActive():
+            self._start_reconstruction()
+
+    def _locked_description(self, plan: dict[str, Any], separator: str = "、") -> str:
+        return separator.join(
+            f"{item['name']} {self.stats['sub_stats']['tiers'][item['stat_id']]['values'].index(item['value']) + 1}档"
+            f" · {self._format_value(item['stat_id'], item['value'])}"
+            for item in plan["locked_stats"])
+
+    @staticmethod
+    def _reconstruction_amount(value: Any, *, signed: bool = False) -> str:
+        if value is None:
+            return "—"
+        return f"{value:+.4g}" if signed else f"{value:.4g}"
+
+    def _display_reconstruction(self, result: dict[str, Any]) -> None:
+        from src.echo_reconstruction import compare_budget
+
+        comparison = compare_budget(result["plans"], self.reconstruction_budget.value())
+        # 先完成所有计算，再提交，防止错误响应留下旧输入的部分表格。
+        plans = sorted(result["plans"], key=lambda plan: (plan["locked_count"], -plan["expected_delta"]))
+        rows = []
+        amount = self._reconstruction_amount
+        for plan in plans:
+            rows.append([
+                str(plan["locked_count"]), self._locked_description(plan, "\n"), f"{plan['probability']:.4%}",
+                amount(plan["expected_delta"], signed=True), amount(plan["gain_on_success"]), str(plan["cost"]),
+                amount(plan["positive_gain_per_transducer"]),
+                amount(plan["expected_cost_to_improve"]) if plan["expected_cost_to_improve"] is not None
+                else "无法获得 / ∞"])
+        budget_rows = []
+        for plan in comparison["best_by_count"]:
+            value = plan["budget"]
+            affordable = value["max_attempts"] > 0
+            budget_rows.append([
+                str(plan["locked_count"]), self._locked_description(plan, "\n") if affordable else "预算不足",
+                f"{value['max_attempts']} 次 / {value['max_cost']} 枚",
+                f"{value['success_probability']:.4%}" if affordable else "—",
+                amount(value["expected_delta"], signed=True) if affordable else "—",
+                amount(value["expected_cost"]) if affordable else "—",
+                amount(value["net_gain_per_transducer"], signed=True) if affordable else "—",
+                amount(value["next_marginal_delta"], signed=True) if affordable else "—",
+                amount(value["next_marginal_cost"]) if affordable else "—"])
+        for widget, values in ((self.reconstruction_plans_table, rows),
+                               (self.reconstruction_budget_table, budget_rows)):
+            widget.setRowCount(len(values))
+            for row, texts in enumerate(values):
+                for column, text in enumerate(texts):
+                    item = QTableWidgetItem(text)
+                    item.setToolTip(text)
+                    widget.setItem(row, column, item)
+            widget.resizeRowsToContents()
+        self._reconstruction_rows = plans
+        self._reconstruction_budget_rows = comparison["best_by_count"]
+        self._reconstruction_result = result
+        self.reconstruction_status.setText(f"频整器已更新 · {len(plans)} 种锁法 · {result['method']}")
+        recommendation = comparison["recommendation"]
+        if recommendation is None:
+            text = "同预算建议：暂不投入。可执行的固定锁法终态期望Δ分均不为正，或当前预算不足。"
+        else:
+            value = recommendation["budget"]
+            text = (f"同预算建议（固定锁法内期望升分最高）：锁 {recommendation['locked_count']} 条，"
+                    f"最多 {value['max_attempts']} 次 / {value['max_cost']} 枚；"
+                    f"升分概率 {value['success_probability']:.4%}，终态期望Δ分 "
+                    f"{amount(value['expected_delta'], signed=True)}，期望消耗 {amount(value['expected_cost'])} 枚。\n"
+                    f"锁法：{self._locked_description(recommendation)}")
+        self.reconstruction_recommendation.setText(text)
+        self._display_reconstruction_selection()
+
+    def _display_reconstruction_selection(self) -> None:
+        from src.echo_reconstruction import evaluate_budget
+
+        self.reconstruction_plans_table.clearSelection()
+        if not self.reconstruction_locks:
+            self.reconstruction_selected.setText("尚未锁定：请勾选 1～4 个词条；全部锁法与同预算比较见下表。")
+            return
+        if self._reconstruction_result is None:
+            self.reconstruction_selected.setText("当前锁法等待有效的五词条计算结果。")
+            return
+        plan = next(plan for plan in self._reconstruction_result["plans"]
+                    if set(plan["locked_ids"]) == self.reconstruction_locks)
+        value = evaluate_budget(plan, self.reconstruction_budget.value())
+        amount = self._reconstruction_amount
+        success_cost = (amount(plan["expected_cost_to_improve"])
+                if plan["expected_cost_to_improve"] is not None else "无法获得 / ∞")
+        self.reconstruction_selected.setText(
+            f"当前锁 {plan['locked_count']} 条 / 洗 {plan['rerolled_count']} 条：{self._locked_description(plan)}\n"
+            f"单次正提升概率 {plan['probability']:.4%} · 消耗 {plan['cost']} 枚 · "
+            f"期望Δ分 {amount(plan['expected_delta'], signed=True)} · "
+            f"成功时平均Δ分 {amount(plan['gain_on_success'])}\n"
+            f"正收益/枚 {amount(plan['positive_gain_per_transducer'])} · "
+            f"升分期望消耗 {success_cost} 枚\n"
+            f"当前预算最多 {value['max_attempts']} 次 / {value['max_cost']} 枚 · "
+            f"升分概率 {value['success_probability']:.4%} · 终态期望Δ分 "
+            f"{amount(value['expected_delta'], signed=True)} · 期望实际消耗 {amount(value['expected_cost'])} 枚")
+        for row, item in enumerate(self._reconstruction_rows):
+            if set(item["locked_ids"]) == self.reconstruction_locks:
+                self.reconstruction_plans_table.selectRow(row)
+                break
+
+    def _reconstruction_budget_changed(self) -> None:
+        if self._reconstruction_result is not None:
+            self._display_reconstruction(self._reconstruction_result)
+
+    def _apply_reconstruction_plan(self, row: int, _column: int) -> None:
+        if self._reconstruction_result is None:
+            return
+        self.reconstruction_locks = set(self._reconstruction_rows[row]["locked_ids"])
+        self._sync_reconstruction_buttons()
+        self._display_reconstruction_selection()
+
+    def _apply_reconstruction_budget_plan(self, row: int, _column: int) -> None:
+        if self._reconstruction_result is None:
+            return
+        plan = self._reconstruction_budget_rows[row]
+        if not plan["budget"]["max_attempts"]:
+            return
+        self.reconstruction_locks = set(plan["locked_ids"])
+        self._sync_reconstruction_buttons()
+        self._display_reconstruction_selection()
+
     def _format_value(self, stat_id: str, value: float) -> str:
         suffix = "%" if self.stats["stat_definitions"][stat_id]["unit"] == "percentage_points" else ""
         return f"{value:g}{suffix}"
@@ -511,6 +860,7 @@ class EchoWindow(QMainWindow):
             self.progress.setValue(0)
             self._update_progress_status(unavailable="输入有误")
             self.strategy_status.setText("策略输入无效")
+            self._invalidate_reconstruction("频整器输入无效")
             return
         self._score_result = result
         score, target = result["score"], self.target.value()
@@ -528,6 +878,7 @@ class EchoWindow(QMainWindow):
                       f"{item['weight']:g}", f"{item['score']:g}"]
             for col, value in enumerate(values):
                 self.details.setItem(row, col, QTableWidgetItem(value))
+        self._queue_reconstruction()
         params = {name: box.value() for name, box in self.strategy_inputs.items()}
         params["bins"] = 1000
         self._strategy_pending = (self._strategy_version, deepcopy({
@@ -624,6 +975,15 @@ class EchoWindow(QMainWindow):
         self._strategy_pool.waitForDone()
         self._strategy_task = None
         self._strategy_cache.clear()
+        self._reconstruction_version += 1
+        self._reconstruction_timer.stop()
+        self._reconstruction_pending = None
+        self._reconstruction_cancelled.set()
+        if self._reconstruction_task is not None:
+            self._reconstruction_task.signals.finished.disconnect(self._reconstruction_finished)
+        self._reconstruction_pool.waitForDone()
+        self._reconstruction_task = None
+        self._reconstruction_cache.clear()
         super().closeEvent(event)
 
     def apply_weights(self, weights: dict[str, Any]) -> None:
