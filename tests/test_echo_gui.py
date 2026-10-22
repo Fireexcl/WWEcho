@@ -15,7 +15,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QPushButton, QTabWidget
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton, QTabWidget
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
 
@@ -135,6 +135,16 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIs(layout.itemAt(3).widget(), self.window.progress)
         self.assertIs(layout.itemAt(5).widget(), self.window.details)
         self.assertIsInstance(layout.itemAt(6).layout(), QGridLayout)
+
+    def test_strategy_results_share_one_row_with_equal_columns(self):
+        layout = self.window.score_label.parentWidget().layout()
+        results = layout.itemAt(8).layout()
+        self.assertIsInstance(results, QHBoxLayout)
+        self.assertEqual(results.count(), 2)
+        self.assertIs(results.itemAt(0).widget(), self.window.zero_strategy.parentWidget())
+        self.assertIs(results.itemAt(1).widget(), self.window.current_strategy.parentWidget())
+        self.assertEqual(results.stretch(0), 1)
+        self.assertEqual(results.stretch(1), 1)
 
     def test_progress_uses_fixed_fifty_point_scale_when_target_changes(self):
         expected = int(self.window._score_result["score"] / 50 * 1000)

@@ -382,6 +382,7 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self.strategy_status)
         self.zero_strategy = QLabel("—")
         self.current_strategy = QLabel("—")
+        strategy_results = QHBoxLayout()
         for title, label in [("从零激活 · 反复尝试至成功", self.zero_strategy),
                              ("当前词条 · 是否继续", self.current_strategy)]:
             panel = QGroupBox(title)
@@ -389,7 +390,8 @@ class EchoWindow(QMainWindow):
             label.setWordWrap(True)
             label.setTextFormat(Qt.TextFormat.PlainText)
             panel_layout.addWidget(label)
-            layout.addWidget(panel)
+            strategy_results.addWidget(panel, 1)
+        layout.addLayout(strategy_results)
         self.result_hint = QLabel(
             "分数网格近似：当前完整激活概率下界与 0 词条基准比较；达到或超过基准且下界大于 0 才推荐继续。"
             "相对基准策略成功率（近似）与完整激活概率不是同一指标，推荐不是成本最优。"
