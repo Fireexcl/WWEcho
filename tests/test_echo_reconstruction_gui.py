@@ -124,6 +124,12 @@ class ReconstructionGuiTests(unittest.TestCase):
     def test_five_buttons_require_full_echo_and_limit_locks_to_four(self):
         buttons = self.window.reconstruction_lock_buttons
         self.assertEqual(len(buttons), 5)
+        grid = self.window.reconstruction_buttons_layout
+        for column, button in enumerate(buttons):
+            self.assertIs(grid.itemAtPosition(0, column).widget(), button)
+            self.assertEqual(grid.columnStretch(column), 1)
+        self.assertEqual(grid.rowCount(), 1)
+        self.assertEqual(grid.columnCount(), 5)
         self.assertTrue(all(button.isCheckable() and not button.isEnabled() for button in buttons))
         self.assertEqual(self.window.reconstruction_budget.value(), 4)
         self.assertIn("开满五条", self.window.reconstruction_status.text())
@@ -168,6 +174,25 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertIs(self.window._reconstruction_result, result)
         self.assertEqual(len(table.selectionModel().selectedRows()), 1)
         self.assertEqual(table.selectionModel().selectedRows()[0].row(), 8)
+
+    def test_metric_cards_follow_selected_plan_and_clear_stale_results(self):
+        self.fill_five()
+        self.wait_for_result()
+        self.window.reconstruction_plans_table.cellClicked.emit(8, 1)
+        selected = self.window._reconstruction_rows[8]
+        metrics = self.window.reconstruction_metrics
+        self.assertEqual(metrics["probability"].text(), f"{selected['probability']:.4%}")
+        self.assertEqual(metrics["delta"].text(), f"{selected['expected_delta']:+.4g}")
+        self.assertEqual(metrics["cost"].text(), f"{selected['cost']} 枚")
+        self.assertEqual(metrics["delta"].property("tone"),
+                         "positive" if selected["expected_delta"] > 0 else
+                         "negative" if selected["expected_delta"] < 0 else "muted")
+        self.window.clear_reconstruction_locks()
+        self.assertTrue(all(label.text() == "—" for label in metrics.values()))
+        self.window.reconstruction_lock_buttons[0].click()
+        self.assertNotEqual(metrics["cost"].text(), "—")
+        self.window.clear_sub_stats()
+        self.assertTrue(all(label.text() == "—" for label in metrics.values()))
 
     def test_budget_changes_reuse_cache_and_show_equal_budget_and_marginal_values(self):
         self.fill_five()

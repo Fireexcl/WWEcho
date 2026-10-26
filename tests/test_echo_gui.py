@@ -134,11 +134,92 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIs(layout.itemAt(2).widget(), self.window.progress_status)
         self.assertIs(layout.itemAt(3).widget(), self.window.progress)
         self.assertIs(layout.itemAt(5).widget(), self.window.details)
-        self.assertIsInstance(layout.itemAt(6).layout(), QGridLayout)
+        self.assertIs(layout.itemAt(6).widget(), self.window.cost_divider)
+        self.assertEqual(layout.itemAt(7).widget().text(), "成本估算相关参数")
+        self.assertIs(layout.itemAt(8).layout(), self.window.cost_parameters_layout)
+
+    def test_cost_parameters_use_four_equal_columns(self):
+        grid = self.window.cost_parameters_layout
+        for column, box in enumerate(self.window.strategy_inputs.values()):
+            self.assertIs(grid.itemAtPosition(1, column).widget(), box)
+            self.assertEqual(grid.columnStretch(column), 1)
+            self.assertIsNotNone(grid.itemAtPosition(0, column).widget())
+        self.assertEqual(grid.columnCount(), 4)
+
+    def test_weight_source_default_import_edit_restore_and_unrelated_changes(self):
+        label = self.window.weight_source_label
+        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
+        layout = self.window.weight_tabs.parentWidget().layout()
+        self.assertEqual(layout.indexOf(label) + 1, layout.indexOf(self.window.weight_tabs))
+        self.window.target.setValue(41)
+        self.window.cost.setCurrentIndex(0)
+        self.window.strategy_inputs["recovery"].setValue(.75)
+        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
+        for inputs in self.window.weight_inputs.values():
+            self.window.restore_weights()
+            box = next(iter(inputs.values()))
+            box.setValue(box.value() + 1)
+            self.assertEqual(label.text(), "自定义权重")
+        preset = self.window.current_weights()
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色权重.json", "")), \
+                patch("src.echo_gui.load_json", return_value=preset):
+            self.window.import_weights()
+        self.assertEqual(label.text(), "导入-角色权重.json")
+        self.window.clear_sub_stats()
+        self.assertEqual(label.text(), "导入-角色权重.json")
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")):
+            self.window.import_weights()
+        self.assertEqual(label.text(), "导入-角色权重.json")
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/bad.json", "")), \
+                patch("src.echo_gui.load_json", side_effect=ValueError("bad preset")), \
+                patch("src.echo_gui.QMessageBox.warning"):
+            self.window.import_weights()
+        self.assertEqual(label.text(), "导入-角色权重.json")
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        box.setValue(box.value() + 1)
+        self.assertEqual(label.text(), "自定义权重")
+        self.window.restore_weights()
+        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
+
+    def test_stats_divider_and_clear_button_style(self):
+        layout = self.window.stats_divider.parentWidget().layout()
+        self.assertIs(layout.itemAt(1).widget(), self.window.stats_divider)
+        self.assertIs(layout.itemAt(2).layout(), self.window.sub_options_layout)
+        self.assertEqual(self.window.clear_sub_stats_button.objectName(), "clearSelection")
+        self.assertEqual(self.window.width(), 980)
+
+    def test_strategy_metric_cards_match_results_and_clear_pending_values(self):
+        self.window._strategy_timer.stop()
+        self.window._display_strategy(strategy_result())
+        metrics = self.window.strategy_metrics
+        self.assertEqual(metrics["zero_probability"].text(), "25.00%")
+        self.assertEqual(metrics["zero_cost"].text(), "32")
+        self.assertEqual(metrics["current_probability"].text(), "10.00%")
+        self.assertEqual(metrics["future_cost"].text(), "3")
+        self.window._display_strategy(strategy_result(unavailable=True))
+        self.assertEqual(metrics["zero_cost"].text(), "不可达 / ∞")
+        self.assertEqual(metrics["zero_cost"].property("tone"), "muted")
+        self.window.target.setValue(41)
+        self.assertTrue(all(label.text() == "—" for label in metrics.values()))
+
+    def test_score_table_highlights_contributions_and_aligns_numbers(self):
+        self.assertTrue(self.window.details.alternatingRowColors())
+        self.assertFalse(self.window.details.showGrid())
+        for row in range(self.window.details.rowCount()):
+            cell = self.window.details.item(row, 4)
+            self.assertTrue(cell.font().bold())
+            self.assertTrue(cell.textAlignment() & Qt.AlignmentFlag.AlignRight)
+            self.assertEqual(cell.foreground().color().name(), "#2456a6")
+
+    def test_minimum_window_width_does_not_require_page_horizontal_scroll(self):
+        self.window.resize(760, 940)
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(self.window.centralWidget().horizontalScrollBar().maximum(), 0)
 
     def test_strategy_results_share_one_row_with_equal_columns(self):
         layout = self.window.score_label.parentWidget().layout()
-        results = layout.itemAt(8).layout()
+        results = layout.itemAt(10).layout()
         self.assertIsInstance(results, QHBoxLayout)
         self.assertEqual(results.count(), 2)
         self.assertIs(results.itemAt(0).widget(), self.window.zero_strategy.parentWidget())
