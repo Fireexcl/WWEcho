@@ -29,6 +29,12 @@ QScrollArea { border: none; }
 QGroupBox { background: white; border: 1px solid #e0e6ef; border-radius: 14px;
             margin-top: 20px; padding: 22px 18px 16px; font-size: 16px; font-weight: 600; }
 QGroupBox::title { subcontrol-origin: margin; left: 20px; padding: 0 8px; color: #334766; }
+QFrame#collapsibleSection { background: white; border: 1px solid #e0e6ef; border-radius: 14px; }
+QGroupBox#sectionContent { border: none; margin-top: 0; padding: 0 18px 16px; }
+QPushButton#sectionToggle { background: transparent; border: none; border-radius: 10px;
+    text-align: left; padding: 14px 20px; font-size: 16px; font-weight: 600; color: #334766; }
+QPushButton#sectionToggle:hover { background: #edf3ff; }
+QPushButton#sectionToggle:focus { border: 1px solid #9fb9ed; }
 QLabel { background: transparent; }
 QLabel#title { font-size: 30px; font-weight: 700; color: #172b4d; }
 QLabel#muted, QLabel#metricCaption { color: #65758b; font-size: 12px; }
@@ -85,6 +91,36 @@ QScrollBar::handle:vertical { background: #c5cfdf; border-radius: 4px; min-heigh
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QStatusBar { background: #f4f6fa; color: #65758b; }
 """
+
+
+class CollapsibleSection(QFrame):
+    """仅切换内容可见性，保留控件、输入与后台任务生命周期。"""
+
+    def __init__(self, content: QGroupBox) -> None:
+        super().__init__()
+        self.setObjectName("collapsibleSection")
+        self.section_title = content.title()
+        self.content = content
+        content.setTitle("")
+        content.setObjectName("sectionContent")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(0)
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("sectionToggle")
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(True)
+        self.toggle_button.setAccessibleName(self.section_title)
+        self.toggle_button.toggled.connect(self._set_expanded)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(content)
+        self._set_expanded(True)
+
+    def _set_expanded(self, expanded: bool) -> None:
+        self.toggle_button.setText(f"{'▼' if expanded else '▶'}  {self.section_title}")
+        self.toggle_button.setToolTip("点击折叠此区域" if expanded else "点击展开此区域")
+        self.content.setVisible(expanded)
+        self.updateGeometry()
 
 
 class ManualWeightInput(QDoubleSpinBox):
@@ -242,7 +278,7 @@ class EchoWindow(QMainWindow):
         font = QFont()
         font.setFamilies(["PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", "Arial"])
         self.setFont(font)
-        self.setWindowTitle("WWEcho · 声骸评分")
+        self.setWindowTitle("WWEcho: 声骸评分 · 开孔推荐 · 频整计算")
         self.resize(980, 940)
         self.setMinimumSize(760, 680)
         self.setStyleSheet(STYLE)
@@ -253,16 +289,19 @@ class EchoWindow(QMainWindow):
         layout = QVBoxLayout(canvas)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
-        title = QLabel("声骸评分工作台")
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        title = QLabel("声骸词条综合工作台")
         title.setObjectName("title")
         layout.addWidget(title)
-        subtitle = QLabel("五星 +25 · 手动权重 · 主词条、小词条与副词条实时评分")
+        subtitle = QLabel("支持导入/手动权重 · 实时评分 · 开孔成功率计算 · 频整器洗练推荐")
         subtitle.setObjectName("muted")
         layout.addWidget(subtitle)
-        layout.addWidget(self._weights_panel())
-        layout.addWidget(self._stats_panel())
-        layout.addWidget(self._results_panel())
-        layout.addWidget(self._reconstruction_panel())
+        self.sections: list[CollapsibleSection] = []
+        for panel in (self._weights_panel(), self._stats_panel(),
+                      self._results_panel(), self._reconstruction_panel()):
+            section = CollapsibleSection(panel)
+            self.sections.append(section)
+            layout.addWidget(section)
         scroll.setWidget(canvas)
         self.setCentralWidget(scroll)
         self._refresh_main()
@@ -340,7 +379,7 @@ class EchoWindow(QMainWindow):
         group = QGroupBox("01  权重配置")
         layout = QVBoxLayout(group)
         toolbar = QHBoxLayout()
-        hint = QLabel("权重 = 每单位词条数值的系数；全局理论最高分对齐为 50 分，0 表示不计分。")
+        hint = QLabel("权重为每单位词条数值的系数；不同的权重系统得到的评分不同；请根据队伍、实战需求进行调整。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         toolbar.addWidget(hint, 1)
@@ -401,8 +440,12 @@ class EchoWindow(QMainWindow):
         self.calculate()
 
     def _stats_panel(self) -> QGroupBox:
-        group = QGroupBox("02  声骸词条与档位")
+        group = QGroupBox("02  声骸词条与档位选择")
         layout = QVBoxLayout(group)
+        hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         header = QGridLayout()
         self.cost = QComboBox()
         for cost in (1, 3, 4):
@@ -432,6 +475,7 @@ class EchoWindow(QMainWindow):
         header.addWidget(QLabel("固定小词条"), 2, 0)
         header.addWidget(self.minor_stat_label, 2, 1)
         header.addWidget(self.minor_value, 2, 2, 1, 2)
+        self.minor_stat_label.setContentsMargins(8, 0, 0, 0)
         layout.addLayout(header)
         self.stats_divider = self._divider()
         layout.addWidget(self.stats_divider)
@@ -472,16 +516,15 @@ class EchoWindow(QMainWindow):
         layout.addLayout(options)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
-        hint = QLabel()
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
-        hint.setText("直接点击词条名选择，最多 5 项；每项档位可单独设置。再次点击可取消选择。")
-        layout.addWidget(hint)
         return group
 
     def _results_panel(self) -> QGroupBox:
         group = QGroupBox("03  目标与计算结果")
         layout = QVBoxLayout(group)
+        hint = QLabel("根据所选 Cost、主词条和副词条档位计算评分，并与目标分数对比。")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("目标分数"))
         self.target = self._number(30)

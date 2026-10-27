@@ -127,6 +127,40 @@ class EchoGuiTests(unittest.TestCase):
         self.window.target.setValue(0)
         self.assertEqual(self.window.progress.value(), int(expected / 50 * 1000))
 
+    def test_four_sections_collapse_independently_and_preserve_inputs(self):
+        self.assertEqual(len(self.window.sections), 4)
+        self.window.show()
+        self.app.processEvents()
+        original = self.window.current_weights(), self.window.current_echo(), self.window.target.value()
+        for index, section in enumerate(self.window.sections):
+            self.assertTrue(section.toggle_button.isChecked())
+            self.assertTrue(section.toggle_button.text().startswith("▼"))
+            expanded_height = section.sizeHint().height()
+            QTest.mouseClick(section.toggle_button, Qt.MouseButton.LeftButton)
+            self.app.processEvents()
+            self.assertTrue(section.content.isHidden())
+            self.assertTrue(section.toggle_button.text().startswith("▶"))
+            self.assertLess(section.sizeHint().height(), expanded_height)
+            for other in self.window.sections[index + 1:]:
+                self.assertFalse(other.content.isHidden())
+        self.assertEqual(original, (self.window.current_weights(), self.window.current_echo(),
+                                    self.window.target.value()))
+        for section in self.window.sections:
+            section.toggle_button.setFocus()
+            QTest.keyClick(section.toggle_button, Qt.Key.Key_Space)
+            self.assertFalse(section.content.isHidden())
+            self.assertTrue(section.toggle_button.text().startswith("▼"))
+
+    def test_collapsed_results_receive_background_strategy_updates(self):
+        section = self.window.sections[2]
+        section.toggle_button.click()
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        self.assertTrue(section.content.isHidden())
+        self.assertNotEqual(self.window.strategy_metrics["zero_probability"].text(), "—")
+        section.toggle_button.click()
+        self.assertFalse(section.content.isHidden())
+        self.assertIn("完整激活概率区间", self.window.current_strategy.text())
+
     def test_score_results_directly_below_target_before_strategy_parameters(self):
         layout = self.window.score_label.parentWidget().layout()
         self.assertIs(layout.itemAt(0).layout().itemAt(1).widget(), self.window.target)
