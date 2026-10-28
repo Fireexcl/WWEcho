@@ -30,7 +30,7 @@ def activation_defaults(costs: dict[str, Any]) -> dict[str, float]:
             raise ValueError(f"默认成本参数 {name} 不能为负数")
         defaults[name] = number
     if defaults["recovery"] > 1 or defaults["tuning_recovery"] > 1:
-        raise ValueError("经验和开孔素材的默认弃置回收比例必须分别在 0～1 之间")
+        raise ValueError("经验和打孔器的默认弃置回收比例必须分别在 0～1 之间")
     defaults["experience_weight"] *= EXPERIENCE_WEIGHT_UNIT / experience_unit
     finite_number(defaults["experience_weight"], "每千经验权重")
     return defaults

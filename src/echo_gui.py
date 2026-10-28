@@ -666,9 +666,9 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self.cost_divider)
         self.cost_parameters_label = QLabel("成本估算相关参数")
         self.cost_parameters_label.setToolTip(
-            "用户提供成本：每次开孔 10 个素材；经验按 500 为最小单位投入，余量保留。\n"
-            "强化和开孔不会失败；只有主动弃置回收才返还，经验默认 70%、开孔素材默认 30%。\n"
-            "经验向下取整到 500，开孔素材按个向下取整；不含货币及胚子获取成本。\n"
+            "用户提供成本：每次开孔 10 个打孔器；经验按 500 为最小单位投入，余量保留。\n"
+            "强化和开孔不会失败；只有主动弃置回收才返还，经验默认 70%、打孔器默认 30%。\n"
+            "经验向下取整到 500，打孔器按个向下取整；不含货币及胚子获取成本。\n"
             + self.cost_defaults_note)
         layout.addWidget(self.cost_parameters_label)
         parameters = QGridLayout()
@@ -694,10 +694,10 @@ class EchoWindow(QMainWindow):
         self.strategy_inputs["recovery"].setToolTip(
             "弃置回收时返还经验，实际有损耗略小于70%。\n"
             "成本模型假设未达标且停止投入时选择回收。\n"
-            "按累计实际投入经验计算后向下取整到 500，不影响开孔素材回收比例。")
+            "按累计实际投入经验计算后向下取整到 500，不影响打孔器回收比例。")
         self.strategy_inputs["tuning_recovery"].setToolTip(
             "打孔器回收，默认 30%：每开孔消耗 10 个，主动回收返还 3 个。\n"
-            "按累计已用开孔素材计算后向下取整到整数个，不影响经验回收比例。")
+            "按累计已用打孔器计算后向下取整到整数个，不影响经验回收比例。")
         self.strategy_inputs["experience_weight"].setToolTip(
             "每 1000 点经验的成本权重，缺少密音筒可提高。\n"
             + self.cost_defaults_note)
@@ -716,11 +716,11 @@ class EchoWindow(QMainWindow):
             panel_layout = QVBoxLayout(panel)
             metrics = QHBoxLayout()
             definitions = ([
-                ("zero_probability", "策略成功率 · 近似", "从零开始，按基准策略单次尝试成功的近似概率，不是完整激活概率。"),
-                ("zero_cost", "成功期望总净成本", "反复尝试直到达标的总加权净成本；假设未达标且停止投入时主动弃置回收，达标保留。"),
+                ("zero_probability", "有弃置时单次成功率", "从新胚子开始，每开一条都按建议判断是否继续，最终达标的概率；近似计算，可能提前弃置。"),
+                ("zero_cost", "成功达标时累计成本", "反复换胚子直到成功的平均累计成本，包含此前弃置的投入并扣除回收；是平均值，不是保证花费。"),
             ] if label is self.zero_strategy else [
-                ("current_probability", "完整激活概率下界", "当前声骸继续开满后的达标概率下界，不是相对基准策略成功率。"),
-                ("future_cost", "后续加权净成本", "当前词条按规则继续的后续加权净成本；假设未达标停止时主动弃置回收，仅保留不回收时不适用；不代表成本最优。"),
+                ("current_probability", "开完剩余词条达标概率", "不中途弃置，开完此胚子剩余词条的达标概率；范围来自计算误差，不是概率本身会浮动。"),
+                ("future_cost", "此胚子后续平均成本", "按建议处理当前胚子直到达标或弃置的平均成本，已扣除回收；不含弃置后换新胚子的费用，也不保证最省材料。"),
             ])
             self._metric_cards(metrics, definitions, self.strategy_metrics)
             panel_layout.addLayout(metrics)
@@ -731,14 +731,15 @@ class EchoWindow(QMainWindow):
             strategy_results.addWidget(panel, 1)
         layout.addLayout(strategy_results)
         self.result_hint = QLabel(
-            "分数网格近似：当前完整激活概率下界与 0 词条基准比较；达到或超过基准且下界大于 0 才推荐继续。"
-            "相对基准策略成功率（近似）与完整激活概率不是同一指标，推荐不是成本最优。"
-            "成本按用户提供数据：5/10/15/20/25 级各开孔一次，每次 10 个素材；升级经验按 500 单位累计补足，余量保留。"
-            "强化和开孔不会失败；只有主动弃置回收时，经验默认返还 70%，开孔素材默认返还 30%；经验向下取整到 500、素材按个向下取整。"
-            "成本模型假设未达标且停止投入时选择回收、达标保留；仅保留不回收时不应抵扣返还。"
-            "当前后续净成本含既有材料的弃置回收，可能为负；调成本权重不改变推荐，未计货币与胚子获取成本。"
-            "经验成本按每 1000 点经验权重折算，净经验数量仍按实际点数展示。"
-            "从零成本包含反复尝试至成功的总加权净成本；胚子期望为 1/p。"
+            "同一状态、同一开法的概率本身是固定的；显示范围来自分数取整造成的计算误差，不是概率会浮动。"
+            "推荐规则：把新胚子一次开五条的保守达标概率作为参考阈值；当前开完剩余词条的保守估计大于 0 且不低于阈值时继续，每开一条再判断。"
+            "按建议可能提前弃置，成功率会与一次开满不同；这个建议不保证最省材料。\n"
+            "成本按用户提供数据：5/10/15/20/25 级各开孔一次，每次 10 个打孔器；升级经验按 500 单位累计补足，余量保留。"
+            "强化和开孔不会失败；只有主动弃置回收时，经验默认返还 70%，打孔器默认返还 30%；经验向下取整到 500、打孔器按个向下取整。"
+            "成本假设未达标且停止投入时选择回收、达标保留；仅保留不回收时不能扣除返还。\n"
+            "成本和材料数量都是平均值，并非保证花费；材料已扣除弃置回收，负成本表示返还多于后续投入。"
+            "成功达标时累计成本包含反复换胚子直到成功的全部投入；此胚子后续平均成本只算当前这一件。"
+            "经验按原始点数显示，成本按每 1000 点经验权重折算；调整成本权重不会改变推荐，未计货币与胚子获取成本。"
             "分数不是伤害提升百分比。")
         self.result_hint.setObjectName("muted")
         self.result_hint.setWordWrap(True)
@@ -822,7 +823,7 @@ class EchoWindow(QMainWindow):
         self.reconstruction_plans_table.cellClicked.connect(self._apply_reconstruction_plan)
         self.reconstruction_budget_table = table([
             "锁数", "锁定词条与档位", "最多次数 / 消耗", "预算内升分概率", "终态期望Δ分",
-            "期望消耗", "净升分 / 枚", "下次边际Δ分", "下次边际消耗"])
+            "期望消耗", "平均升分 / 枚", "下次边际Δ分", "下次边际消耗"])
         self.reconstruction_budget_table.cellClicked.connect(self._apply_reconstruction_budget_plan)
         tabs.addTab(self.reconstruction_plans_table, "单次 · 全部 30 种锁法（点击套用）")
         tabs.addTab(self.reconstruction_budget_table, "同预算 · 锁 1～4 条择优与边际收益")
@@ -1274,27 +1275,33 @@ class EchoWindow(QMainWindow):
             self._start_strategy()
 
     def _display_strategy(self, result: dict[str, Any]) -> None:
-        def interval(item: dict[str, Any]) -> str:
-                return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
-                    f"{item['full_success_upper']:.2%}\n"
-                    f"相对基准策略成功率（近似）：{item['success_probability']:.2%}")
+        def probability_range(item: dict[str, Any]) -> str:
+            return f"{item['full_success_lower']:.2%} ～ {item['full_success_upper']:.2%}"
+
+        def interval(item: dict[str, Any], title: str, policy_title: str) -> str:
+            return (f"{title}：{probability_range(item)}（估算范围）\n"
+                    f"{policy_title}：{item['success_probability']:.2%}（近似）")
 
         def amount(value: Any) -> str:
-            return "无法获得 / ∞" if value is None else f"{value:,.4g}"
+            if value is None:
+                return "无法获得 / ∞"
+            text = f"{value:.2f}".rstrip("0").rstrip(".")
+            return "0" if text == "-0" else text
 
         zero, current = result["zero"], result["current"]
-        zero_text = (interval(zero) + f"\n单次尝试加权净成本：{amount(zero['attempt_cost'])}"
-                     f"\n成功期望总加权净成本：{amount(zero['expected_cost'])}"
-                     f"\n期望胚子：{amount(zero['expected_embryos'])}"
-                     f" · 净开孔素材：{amount(zero['expected_tuning'])}"
-                     f" · 净经验：{amount(zero['expected_experience'])}")
+        zero_text = (interval(zero, "一次性开五条达标概率", "有弃置时单次成功率")
+                     + f"\n单个胚子成功或弃置时的平均成本：{amount(zero['attempt_cost'])}"
+                     f"\n成功达标时累计成本：{amount(zero['expected_cost'])}"
+                     f"\n预计累计消耗 · 胚子：{amount(zero['expected_embryos'])}"
+                     f" · 打孔器：{amount(zero['expected_tuning'])}"
+                     f" · 经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
-        current_text = (interval(current)
-                + f"\n0 词条达标概率下界基准：{current['baseline_success_lower']:.2%}"
-                + f"\n{recommendation}（与同类新胚子比较，非成本最优）"
+        current_text = (interval(current, "开完剩余词条达标概率", "此胚子后续成功率")
+                        + f"\n参考阈值：新胚子达标概率 {current['baseline_success_lower']:.2%}（保守估计）"
+                        f"\n{recommendation}（按达标机会判断，不保证最省材料）"
                         f"\n原因：{current['reason']}"
-                        f"\n后续加权净成本：{amount(current['future_cost'])}")
-        status = f"策略已更新 · 分数网格近似步长 {result['score_resolution']:g} · {result['method']}"
+                        f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
+        status = "策略已更新 · 概率和平均成本为近似计算"
         self.zero_strategy.setText(zero_text)
         self.current_strategy.setText(current_text)
         self.strategy_status.setText(status)
@@ -1302,7 +1309,7 @@ class EchoWindow(QMainWindow):
         cost = zero["expected_cost"]
         self._set_metric(self.strategy_metrics["zero_cost"], "不可达 / ∞" if cost is None else amount(cost),
                  "muted" if cost is None else "accent")
-        self._set_metric(self.strategy_metrics["current_probability"], f"{current['full_success_lower']:.2%}", "accent")
+        self._set_metric(self.strategy_metrics["current_probability"], probability_range(current), "accent")
         cost = current["future_cost"]
         self._set_metric(self.strategy_metrics["future_cost"], "不可达 / ∞" if cost is None else amount(cost),
                  "muted" if cost is None else "accent")

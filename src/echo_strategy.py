@@ -34,7 +34,7 @@ class ActivationPlanner:
     推荐以相同主词条、Cost、权重和目标下的 0 词条达标概率下界为基准。
     强化和开孔不会失败；成本假设未达标且停止投入时主动弃置回收，达标保留。
     采用最少量经验材料逐阶段升级、余量保留；参数未覆盖时读取配置中的成本权重。
-    recovery 只控制经验返还，tuning_recovery 独立控制开孔素材返还；experience_weight 按每千经验计。
+    recovery 只控制经验返还，tuning_recovery 独立控制打孔器返还；experience_weight 按每千经验计。
     """
 
     def __init__(self, scorer: EchoScorer, costs: dict[str, Any], target: float, *,
@@ -46,13 +46,13 @@ class ActivationPlanner:
         defaults = activation_defaults(costs)
         self.recovery = defaults["recovery"] if recovery is None else nonnegative(recovery, "经验回收比例")
         self.tuning_recovery = (defaults["tuning_recovery"] if tuning_recovery is None
-                                else nonnegative(tuning_recovery, "开孔素材回收比例"))
+                                else nonnegative(tuning_recovery, "打孔器回收比例"))
         if self.recovery > 1 or self.tuning_recovery > 1:
-            raise ValueError("经验和开孔素材的弃置回收比例必须分别在 0～1 之间")
+            raise ValueError("经验和打孔器的弃置回收比例必须分别在 0～1 之间")
         if type(bins) is not int or not 10 <= bins <= 10000:
             raise ValueError("bins 必须是 10～10000 的整数")
         self.bins = bins
-        self.tw = defaults["tuning_weight"] if tuning_weight is None else nonnegative(tuning_weight, "开孔素材权重")
+        self.tw = defaults["tuning_weight"] if tuning_weight is None else nonnegative(tuning_weight, "打孔器权重")
         self.xw = (defaults["experience_weight"] if experience_weight is None
                else nonnegative(experience_weight, "每千经验权重"))
         self.ew = defaults["embryo_weight"] if embryo_weight is None else nonnegative(embryo_weight, "胚子权重")
@@ -66,16 +66,16 @@ class ActivationPlanner:
         experience_unit = Fraction(str(nonnegative(
             costs.get("experience_material_unit", 0), "经验材料单位")))
         tuning_unit = Fraction(str(nonnegative(
-            costs.get("tuning_material_unit", 0), "开孔素材单位")))
+            costs.get("tuning_material_unit", 0), "打孔器单位")))
         required_exp = [Fraction(0)]
         cumulative_tuning = [Fraction(0)]
         for slot, step in enumerate(steps, 1):
             if not isinstance(step, dict) or step.get("slot") != slot:
                 raise ValueError("成本步骤必须按 slot 顺序排列")
-            tuning = Fraction(str(nonnegative(step["tuning"], "开孔素材消耗")))
+            tuning = Fraction(str(nonnegative(step["tuning"], "打孔器消耗")))
             experience = Fraction(str(nonnegative(step["experience"], "经验需求")))
             if tuning_unit and tuning % tuning_unit:
-                raise ValueError("每槽开孔素材消耗必须是材料单位的整数倍")
+                raise ValueError("每次消耗的打孔器数量必须是材料单位的整数倍")
             cumulative_tuning.append(cumulative_tuning[-1] + tuning)
             required_exp.append(required_exp[-1] + experience)
         self.embryo = nonnegative(costs["embryo_cost"], "胚子消耗")
@@ -239,13 +239,13 @@ class ActivationPlanner:
             elif len(raw) == self.limit:
                 reason = "槽位已满，无法继续"
             elif full_hi == 0:
-                reason = "剩余槽位无法达到目标，放弃"
+                reason = "剩下的词条全部开完也达不到目标，建议停止"
             elif full_lo == 0:
-                reason = "分数网格下界未确认正达标概率，保守停止"
+                reason = "目前的计算精度还不能确认有机会达标，建议停止"
             elif full_lo < baseline:
-                reason = "当前保守达标概率低于 0 词条基准，放弃"
+                reason = "此胚子开完的保守达标机会比新胚子低，建议停止"
             else:
-                reason = "当前保守达标概率不低于 0 词条基准，推荐继续并逐条重评"
+                reason = "此胚子开完的保守达标机会不比新胚子差，建议继续，开一条再判断"
             current = dict(full_success_lower=1. if reached else full_lo,
                            full_success_upper=1. if reached else full_hi,
                            success_probability=1. if reached else float(cp[lo]),

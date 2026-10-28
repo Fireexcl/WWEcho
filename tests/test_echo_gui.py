@@ -16,8 +16,8 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton,
-    QTabWidget, QToolButton,
+    QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QTabWidget, QToolButton, QWidget,
 )
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
@@ -162,7 +162,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertNotEqual(self.window.strategy_metrics["zero_probability"].text(), "—")
         section.toggle_button.click()
         self.assertFalse(section.content.isHidden())
-        self.assertIn("完整激活概率区间", self.window.current_strategy.text())
+        self.assertIn("开完剩余词条达标概率", self.window.current_strategy.text())
 
     def test_score_results_directly_below_target_before_strategy_parameters(self):
         layout = self.window.score_label.parentWidget().layout()
@@ -188,15 +188,15 @@ class EchoGuiTests(unittest.TestCase):
     def test_cost_labels_explain_both_material_refunds_and_units(self):
         grid = self.window.cost_parameters_layout
         self.assertEqual([grid.itemAtPosition(0, column).widget().text() for column in range(5)],
-                 ["经验回收比例", "开孔素材回收比例", "开孔素材权重", "每1000经验权重", "胚子权重"])
+                 ["经验回收比例", "打孔器回收比例", "打孔器权重", "每1000经验权重", "胚子权重"])
         self.assertIn("70%", self.window.strategy_inputs["recovery"].toolTip())
         self.assertIn("30%", self.window.strategy_inputs["tuning_recovery"].toolTip())
         self.assertIn("每 1000 点经验", self.window.strategy_inputs["experience_weight"].toolTip())
         self.assertIn("12500", self.window.strategy_inputs["experience_weight"].toolTip())
         hint = self.window.result_hint.text()
-        self.assertIn("每次 10 个素材", hint)
+        self.assertIn("每次 10 个打孔器", hint)
         self.assertIn("经验默认返还 70%", hint)
-        self.assertIn("开孔素材默认返还 30%", hint)
+        self.assertIn("打孔器默认返还 30%", hint)
         self.assertIn("余量保留", hint)
         self.assertIn("强化和开孔不会失败", hint)
         self.assertIn("主动弃置回收", hint)
@@ -302,13 +302,58 @@ class EchoGuiTests(unittest.TestCase):
         metrics = self.window.strategy_metrics
         self.assertEqual(metrics["zero_probability"].text(), "25.00%")
         self.assertEqual(metrics["zero_cost"].text(), "32")
-        self.assertEqual(metrics["current_probability"].text(), "10.00%")
+        self.assertEqual(metrics["current_probability"].text(), "10.00% ～ 20.00%")
         self.assertEqual(metrics["future_cost"].text(), "3")
         self.window._display_strategy(strategy_result(unavailable=True))
         self.assertEqual(metrics["zero_cost"].text(), "不可达 / ∞")
         self.assertEqual(metrics["zero_cost"].property("tone"), "muted")
         self.window.target.setValue(41)
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
+
+    def test_strategy_metric_titles_use_plain_language(self):
+        expected = {
+            "zero_probability": "有弃置时单次成功率",
+            "zero_cost": "成功达标时累计成本",
+            "current_probability": "开完剩余词条达标概率",
+            "future_cost": "此胚子后续平均成本",
+        }
+        for key, title in expected.items():
+            card = self.window.strategy_metrics[key].parentWidget()
+            caption = card.findChild(QLabel, "metricCaption")
+            self.assertEqual(caption.text(), title)
+
+    def test_strategy_numbers_are_plain_and_not_scientific_notation(self):
+        self.window._strategy_timer.stop()
+        result = strategy_result()
+        result["zero"].update(attempt_cost=12345.67, expected_cost=2345678.9,
+                              expected_embryos=13.25, expected_tuning=98765.43,
+                              expected_experience=1234567.89)
+        result["current"]["future_cost"] = -12345.67
+        self.window._display_strategy(result)
+        text = self.window.zero_strategy.text()
+        self.assertIn("单个胚子成功或弃置时的平均成本：12345.67", text)
+        self.assertIn("成功达标时累计成本：2345678.9", text)
+        self.assertIn("胚子：13.25 · 打孔器：98765.43 · 经验：1234567.89", text)
+        self.assertEqual(self.window.strategy_metrics["zero_cost"].text(), "2345678.9")
+        self.assertEqual(self.window.strategy_metrics["future_cost"].text(), "-12345.67")
+        self.assertNotRegex(text, r"\d[eE][+-]?\d")
+
+    def test_ui_replaces_old_jargon_without_hiding_approximation(self):
+        self.window._strategy_timer.stop()
+        self.window._display_strategy(strategy_result())
+        texts = [label.text() for label in self.window.findChildren(QLabel)]
+        texts.extend(group.title() for group in self.window.findChildren(QGroupBox))
+        texts.extend(widget.toolTip() for widget in self.window.findChildren(QWidget))
+        texts.extend(self.window.reconstruction_budget_table.horizontalHeaderItem(column).text()
+                     for column in range(self.window.reconstruction_budget_table.columnCount()))
+        for text in texts:
+            for old in ("净", "加权", "开孔素材", "相对基准策略", "完整激活概率"):
+                self.assertNotIn(old, text)
+        self.assertIn("概率本身是固定的", self.window.result_hint.text())
+        self.assertIn("计算误差", self.window.result_hint.text())
+        self.assertIn("估算范围", self.window.zero_strategy.text())
+        self.assertIn("估算范围", self.window.current_strategy.text())
+        self.assertIn("保守估计", self.window.current_strategy.text())
 
     def test_score_table_highlights_contributions_and_aligns_numbers(self):
         short_table_height = self.window.details.height()
@@ -819,16 +864,17 @@ class EchoGuiTests(unittest.TestCase):
     def test_result_labels_distinguish_probabilities_and_unavailable_costs(self):
         ControlledPlanner.unavailable = True
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
-        for label in (self.window.zero_strategy, self.window.current_strategy):
-            self.assertIn("完整激活概率区间", label.text())
-            self.assertIn("相对基准策略成功率（近似）", label.text())
+        self.assertIn("一次性开五条达标概率", self.window.zero_strategy.text())
+        self.assertIn("有弃置时单次成功率", self.window.zero_strategy.text())
+        self.assertIn("开完剩余词条达标概率", self.window.current_strategy.text())
+        self.assertIn("此胚子后续成功率", self.window.current_strategy.text())
         self.assertIn("30.00% ～ 40.00%", self.window.zero_strategy.text())
         self.assertIn("25.00%", self.window.zero_strategy.text())
         self.assertEqual(self.window.zero_strategy.text().count("无法获得 / ∞"), 4)
         self.assertIn("建议停止", self.window.current_strategy.text())
-        self.assertIn("0 词条达标概率下界基准", self.window.current_strategy.text())
-        self.assertIn("非成本最优", self.window.current_strategy.text())
-        for text in ("分数网格近似", "0 词条基准", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
+        self.assertIn("参考阈值：新胚子达标概率", self.window.current_strategy.text())
+        self.assertIn("不保证最省材料", self.window.current_strategy.text())
+        for text in ("计算误差", "参考阈值", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
             self.assertIn(text, self.window.result_hint.text())
 
     def test_strategy_error_is_visible_without_affecting_scoring(self):
@@ -917,28 +963,33 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
     def assert_results_match_api(self, window, result):
         """核对所有策略展示字段和评分明细，避免 fake 掩盖 API 字段错配。"""
         def amount(value):
-            return "无法获得 / ∞" if value is None else f"{value:,.4g}"
+            if value is None:
+                return "无法获得 / ∞"
+            text = f"{value:.2f}".rstrip("0").rstrip(".")
+            return "0" if text == "-0" else text
 
-        def interval(item):
-            return (f"完整激活概率区间：{item['full_success_lower']:.2%} ～ "
-                    f"{item['full_success_upper']:.2%}\n"
-                    f"相对基准策略成功率（近似）：{item['success_probability']:.2%}")
+        def interval(item, title, policy_title):
+            return (f"{title}：{item['full_success_lower']:.2%} ～ "
+                    f"{item['full_success_upper']:.2%}（估算范围）\n"
+                    f"{policy_title}：{item['success_probability']:.2%}（近似）")
 
         zero, current = result["zero"], result["current"]
-        self.assertEqual(window.zero_strategy.text(), interval(zero) +
-                         f"\n单次尝试加权净成本：{amount(zero['attempt_cost'])}"
-                         f"\n成功期望总加权净成本：{amount(zero['expected_cost'])}"
-                         f"\n期望胚子：{amount(zero['expected_embryos'])}"
-                         f" · 净开孔素材：{amount(zero['expected_tuning'])}"
-                         f" · 净经验：{amount(zero['expected_experience'])}")
+        self.assertEqual(window.zero_strategy.text(),
+                         interval(zero, "一次性开五条达标概率", "有弃置时单次成功率") +
+                         f"\n单个胚子成功或弃置时的平均成本：{amount(zero['attempt_cost'])}"
+                         f"\n成功达标时累计成本：{amount(zero['expected_cost'])}"
+                         f"\n预计累计消耗 · 胚子：{amount(zero['expected_embryos'])}"
+                         f" · 打孔器：{amount(zero['expected_tuning'])}"
+                         f" · 经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
-        self.assertEqual(window.current_strategy.text(), interval(current) +
-                         f"\n0 词条达标概率下界基准：{current['baseline_success_lower']:.2%}"
-                         f"\n{recommendation}（与同类新胚子比较，非成本最优）"
+        self.assertEqual(window.current_strategy.text(),
+                         interval(current, "开完剩余词条达标概率", "此胚子后续成功率") +
+                         f"\n参考阈值：新胚子达标概率 {current['baseline_success_lower']:.2%}（保守估计）"
+                         f"\n{recommendation}（按达标机会判断，不保证最省材料）"
                          f"\n原因：{current['reason']}"
-                         f"\n后续加权净成本：{amount(current['future_cost'])}")
+                         f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
         self.assertEqual(window.strategy_status.text(),
-                         f"策略已更新 · 分数网格近似步长 {result['score_resolution']:g} · {result['method']}")
+                         "策略已更新 · 概率和平均成本为近似计算")
         scored = window._strategy_cache["planner"].scorer.score(window.current_echo())
         self.assertEqual(window.score_label.text(), f"{scored['score']:g} 分")
         score, target = scored["score"], window.target.value()
@@ -972,8 +1023,8 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assert_results_match_api(window, planner.analyze(window.current_echo()))
             self.assertIn("已激活 0/5", window.summary.text())
 
-            self.assertIn("完整激活概率区间：100.00% ～ 100.00%", window.zero_strategy.text())
-            self.assertIn("期望胚子：1 · 净开孔素材：0 · 净经验：0", window.zero_strategy.text())
+            self.assertIn("一次性开五条达标概率：100.00% ～ 100.00%", window.zero_strategy.text())
+            self.assertIn("胚子：1 · 打孔器：0 · 经验：0", window.zero_strategy.text())
             self.assertIn("目标已达成，无需继续", window.current_strategy.text())
             self.assertIn("建议停止", window.current_strategy.text())
         finally:
