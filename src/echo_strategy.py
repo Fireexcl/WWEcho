@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
 
-from src.echo_score import ROOT, EchoScorer, finite_number
-
-DEFAULT_COSTS = ROOT / "config" / "activation-costs.json"
+from src.echo_costs import DEFAULT_COSTS as DEFAULT_COSTS, EXPERIENCE_WEIGHT_UNIT, activation_defaults
+from src.echo_score import EchoScorer, finite_number
 
 
 def nonnegative(value: Any, label: str) -> float:
@@ -19,28 +19,43 @@ def nonnegative(value: Any, label: str) -> float:
     return number
 
 
+def _round_material(amount: Fraction, unit: Fraction, *, up: bool = False) -> Fraction:
+    """按材料单位取整；unit=0 保留连续数量，兼容旧成本配置。"""
+    if not unit:
+        return amount
+    count = math.ceil(amount / unit) if up else math.floor(amount / unit)
+    return count * unit
+
+
 class ActivationPlanner:
     """下取整增分保守决策，上取整增分提供完整激活概率上界。
 
     重复尝试假定胚子主词条已筛选相同、抽样独立且成本固定。
     推荐以相同主词条、Cost、权重和目标下的 0 词条达标概率下界为基准。
+    强化和开孔不会失败；成本假设未达标且停止投入时主动弃置回收，达标保留。
+    采用最少量经验材料逐阶段升级、余量保留；参数未覆盖时读取配置中的成本权重。
+    recovery 只控制经验返还，tuning_recovery 独立控制开孔素材返还；experience_weight 按每千经验计。
     """
 
     def __init__(self, scorer: EchoScorer, costs: dict[str, Any], target: float, *,
-                 recovery: float = .66,
-                 tuning_weight: float = 1, experience_weight: float = 1,
-                 embryo_weight: float = 1, bins: int = 1000) -> None:
+                 recovery: float | None = None, tuning_recovery: float | None = None,
+                 tuning_weight: float | None = None, experience_weight: float | None = None,
+                 embryo_weight: float | None = None, bins: int = 1000) -> None:
         self.scorer = scorer
         self.target = nonnegative(target, "目标分数")
-        self.recovery = nonnegative(recovery, "回收系数")
-        if self.recovery > 1:
-            raise ValueError("回收系数必须在 0～1 之间")
+        defaults = activation_defaults(costs)
+        self.recovery = defaults["recovery"] if recovery is None else nonnegative(recovery, "经验回收比例")
+        self.tuning_recovery = (defaults["tuning_recovery"] if tuning_recovery is None
+                                else nonnegative(tuning_recovery, "开孔素材回收比例"))
+        if self.recovery > 1 or self.tuning_recovery > 1:
+            raise ValueError("经验和开孔素材的弃置回收比例必须分别在 0～1 之间")
         if type(bins) is not int or not 10 <= bins <= 10000:
             raise ValueError("bins 必须是 10～10000 的整数")
         self.bins = bins
-        self.tw = nonnegative(tuning_weight, "调谐权重")
-        self.xw = nonnegative(experience_weight, "经验权重")
-        self.ew = nonnegative(embryo_weight, "胚子权重")
+        self.tw = defaults["tuning_weight"] if tuning_weight is None else nonnegative(tuning_weight, "开孔素材权重")
+        self.xw = (defaults["experience_weight"] if experience_weight is None
+               else nonnegative(experience_weight, "每千经验权重"))
+        self.ew = defaults["embryo_weight"] if embryo_weight is None else nonnegative(embryo_weight, "胚子权重")
         self.ids = list(scorer.tiers)
         self.limit = scorer.stats["sub_stats"]["max_count"]
         if costs.get("schema_version") != 1:
@@ -48,14 +63,36 @@ class ActivationPlanner:
         steps = costs.get("steps")
         if not isinstance(steps, list) or len(steps) != self.limit:
             raise ValueError("成本配置必须覆盖全部激活槽位")
-        self.tuning, self.experience = [], []
+        experience_unit = Fraction(str(nonnegative(
+            costs.get("experience_material_unit", 0), "经验材料单位")))
+        tuning_unit = Fraction(str(nonnegative(
+            costs.get("tuning_material_unit", 0), "开孔素材单位")))
+        required_exp = [Fraction(0)]
+        cumulative_tuning = [Fraction(0)]
         for slot, step in enumerate(steps, 1):
             if not isinstance(step, dict) or step.get("slot") != slot:
                 raise ValueError("成本步骤必须按 slot 顺序排列")
-            self.tuning.append(nonnegative(step["tuning"], "调谐消耗"))
-            self.experience.append(nonnegative(step["experience"], "经验消耗"))
+            tuning = Fraction(str(nonnegative(step["tuning"], "开孔素材消耗")))
+            experience = Fraction(str(nonnegative(step["experience"], "经验需求")))
+            if tuning_unit and tuning % tuning_unit:
+                raise ValueError("每槽开孔素材消耗必须是材料单位的整数倍")
+            cumulative_tuning.append(cumulative_tuning[-1] + tuning)
+            required_exp.append(required_exp[-1] + experience)
         self.embryo = nonnegative(costs["embryo_cost"], "胚子消耗")
-        self.cumulative_exp = [math.fsum(self.experience[:n]) for n in range(self.limit + 1)]
+        # 先按累计需求补足材料，再取相邻差；不能将每段需求单独进位，避免重复计费余量。
+        invested_exp = [_round_material(value, experience_unit, up=True) for value in required_exp]
+        self.cumulative_required_exp = [float(value) for value in required_exp]
+        self.cumulative_exp = [float(value) for value in invested_exp]
+        self.experience = [float(after - before) for before, after in zip(invested_exp, invested_exp[1:])]
+        self.cumulative_tuning = [float(value) for value in cumulative_tuning]
+        self.tuning = [float(after - before) for before, after in zip(cumulative_tuning, cumulative_tuning[1:])]
+        # 只在主动弃置回收终点返还一次；十进制有理数避免比例在整数边界误少返材料。
+        experience_ratio = Fraction(str(self.recovery))
+        tuning_ratio = Fraction(str(self.tuning_recovery))
+        self.recovered_experience = [float(_round_material(value * experience_ratio, experience_unit))
+                                     for value in invested_exp]
+        self.recovered_tuning = [float(_round_material(value * tuning_ratio, tuning_unit))
+                                 for value in cumulative_tuning]
         self.outcomes = []
         for stat_id in self.ids:
             tier = scorer.tiers[stat_id]
@@ -123,8 +160,9 @@ class ActivationPlanner:
             return self.policy_cache[mask]
         n = bin(mask).count("1")
         probability = self.success.copy()
-        tuning = np.zeros(self.bins + 1)
-        experience = np.full(self.bins + 1, -self.recovery * self.cumulative_exp[n])
+        tuning = np.full(self.bins + 1, -self.recovered_tuning[n])
+        experience = np.full(self.bins + 1, -self.recovered_experience[n])
+        tuning[-1] = 0
         experience[-1] = 0
         if n == self.limit:
             return probability, tuning, experience
@@ -184,7 +222,8 @@ class ActivationPlanner:
             self.baseline_probability = baseline
             p, t, x = self._policy(0)
             chance = float(p[0])
-            attempt = self.ew * self.embryo + self.tw * float(t[0]) + self.xw * float(x[0])
+            attempt = (self.ew * self.embryo + self.tw * float(t[0])
+                       + self.xw * (float(x[0]) / EXPERIENCE_WEIGHT_UNIT))
             zero = dict(full_success_lower=float(lower[0]), full_success_upper=float(upper[0]),
                         success_probability=chance, attempt_cost=attempt,
                         expected_cost=attempt / chance if chance > 0 else None,
@@ -212,6 +251,7 @@ class ActivationPlanner:
                            success_probability=1. if reached else float(cp[lo]),
                            baseline_success_lower=baseline,
                            recommend_continue=recommend, reason=reason,
-                           future_cost=0. if reached else self.tw * float(ct[lo]) + self.xw * float(cx[lo]))
+                           future_cost=0. if reached else self.tw * float(ct[lo])
+                           + self.xw * (float(cx[lo]) / EXPERIENCE_WEIGHT_UNIT))
         return dict(zero=zero, current=current, score_resolution=self.resolution,
-                    method="分数网格上下界 DP；0 词条基准策略近似；失败仅回收经验")
+                    method="分数网格上下界 DP；逐条概率门槛弃置近似；按主动弃置回收抵扣材料")

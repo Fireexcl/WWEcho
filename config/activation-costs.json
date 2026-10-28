@@ -1,38 +1,50 @@
 {
     "schema_version": 1,
-    "status": "placeholder",
-    "description": "非实际游戏消耗。每行是解锁并激活下一槽的增量成本；失败仅返还累计经验乘回收系数，调谐器和胚子不返还。",
+    "status": "user_provided",
+    "description": "用户提供并确认：每行 experience 为升级需求的增量经验，不是累计值。实际投入按累计需求向上取整到 500，余量保留；只有玩家主动弃置回收时才返还累计实际投入经验的 70% 和开孔素材的 30%，经验向下取整到 500，开孔素材向下取整到整数个。成本模型假设未达标且停止投入时选择回收，达标保留；仅保留不回收时不应抵扣返还。胚子按每件 1 计数，不含获取成本和货币。",
+    "recovery_ratio": 0.7,
+    "tuning_recovery_ratio": 0.3,
+    "experience_weight_unit": 1000,
+    "default_weights": {
+        "tuning_weight": 1,
+        "experience_weight": 1.6,
+        "embryo_weight": 1
+    },
+    "default_weights_note": "用户估计材料本同时掉落约 12000～13000 经验及 20 个开孔素材，按中值 12500 折算相对成本：每个开孔素材权重 1，每 1000 经验权重 20/(12500/1000)=1.6，即每 500 经验计 0.8 成本。此为供给比例预设，不代表可兑换价格或精确体力成本；胚子权重仍为可自定义的 1。",
+    "experience_material_unit": 500,
+    "tuning_material_unit": 1,
+    "enhanced_echo_material_experience_ratio": 0.7,
     "embryo_cost": 1,
     "steps": [
         {
             "slot": 1,
             "unlock_level": 5,
-            "tuning": 1,
-            "experience": 1
+            "tuning": 10,
+            "experience": 4400
         },
         {
             "slot": 2,
             "unlock_level": 10,
-            "tuning": 1,
-            "experience": 1
+            "tuning": 10,
+            "experience": 12100
         },
         {
             "slot": 3,
             "unlock_level": 15,
-            "tuning": 1,
-            "experience": 1
+            "tuning": 10,
+            "experience": 23100
         },
         {
             "slot": 4,
             "unlock_level": 20,
-            "tuning": 1,
-            "experience": 1
+            "tuning": 10,
+            "experience": 39500
         },
         {
             "slot": 5,
             "unlock_level": 25,
-            "tuning": 1,
-            "experience": 1
+            "tuning": 10,
+            "experience": 63500
         }
     ]
 }

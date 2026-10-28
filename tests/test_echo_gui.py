@@ -12,7 +12,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QPoint, QPointF, QThread, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -177,13 +177,80 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(layout.itemAt(8).widget().text(), "成本估算相关参数")
         self.assertIs(layout.itemAt(9).layout(), self.window.cost_parameters_layout)
 
-    def test_cost_parameters_use_four_equal_columns(self):
+    def test_cost_parameters_use_five_equal_columns(self):
         grid = self.window.cost_parameters_layout
         for column, box in enumerate(self.window.strategy_inputs.values()):
             self.assertIs(grid.itemAtPosition(1, column).widget(), box)
             self.assertEqual(grid.columnStretch(column), 1)
             self.assertIsNotNone(grid.itemAtPosition(0, column).widget())
-        self.assertEqual(grid.columnCount(), 4)
+        self.assertEqual(grid.columnCount(), 5)
+
+    def test_cost_labels_explain_both_material_refunds_and_units(self):
+        grid = self.window.cost_parameters_layout
+        self.assertEqual([grid.itemAtPosition(0, column).widget().text() for column in range(5)],
+                 ["经验回收比例", "开孔素材回收比例", "开孔素材权重", "每1000经验权重", "胚子权重"])
+        self.assertIn("70%", self.window.strategy_inputs["recovery"].toolTip())
+        self.assertIn("30%", self.window.strategy_inputs["tuning_recovery"].toolTip())
+        self.assertIn("每 1000 点经验", self.window.strategy_inputs["experience_weight"].toolTip())
+        self.assertIn("12500", self.window.strategy_inputs["experience_weight"].toolTip())
+        hint = self.window.result_hint.text()
+        self.assertIn("每次 10 个素材", hint)
+        self.assertIn("经验默认返还 70%", hint)
+        self.assertIn("开孔素材默认返还 30%", hint)
+        self.assertIn("余量保留", hint)
+        self.assertIn("强化和开孔不会失败", hint)
+        self.assertIn("主动弃置回收", hint)
+        self.assertIn("保留不回收", hint)
+        self.assertNotIn("失败回收", hint)
+        self.assertNotIn("占位", hint)
+
+    def test_cost_default_inputs_read_config_and_forward_to_worker(self):
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        params = ControlledPlanner.instances[-1].params
+        self.assertEqual(params["experience_weight"], 1.6)
+        self.assertEqual(params["recovery"], .7)
+        self.assertEqual(params["tuning_recovery"], .3)
+        self.assertEqual(params["tuning_weight"], 1)
+        self.assertEqual(params["embryo_weight"], 1)
+
+    def test_cost_default_inputs_follow_config_override(self):
+        cost_path = DEFAULT_STATS.with_name("activation-costs.json")
+        costs = load_json(cost_path)
+        costs["recovery_ratio"] = .6
+        costs["tuning_recovery_ratio"] = .2
+        costs["default_weights"] = {"tuning_weight": 2, "experience_weight": 3.2,
+                                    "embryo_weight": 0}
+
+        def custom_config(path):
+            return costs if path == cost_path else load_json(path)
+
+        with patch("src.echo_gui.load_json", side_effect=custom_config):
+            window = EchoWindow()
+            try:
+                self.assertEqual({name: box.value() for name, box in window.strategy_inputs.items()},
+                                 {"recovery": .6, "tuning_recovery": .2, **costs["default_weights"]})
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_cost_default_config_unavailable_does_not_break_scoring(self):
+        cost_path = DEFAULT_STATS.with_name("activation-costs.json")
+        for error in (OSError("missing costs"), ValueError("bad costs")):
+            def unavailable_config(path):
+                if path == cost_path:
+                    raise error
+                return load_json(path)
+
+            with self.subTest(error=error), patch("src.echo_gui.load_json", side_effect=unavailable_config):
+                window = EchoWindow()
+                try:
+                    self.assertIsNotNone(window._score_result)
+                    self.assertIn("成本默认配置不可用", window.cost_parameters_label.toolTip())
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
 
     def test_weight_source_default_import_edit_restore_and_unrelated_changes(self):
         label = self.window.weight_source_label
@@ -271,6 +338,48 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.theoretical_max_help.accessibleName(), "未对齐分数说明")
         self.assertIn("未对齐分数 =", self.window.theoretical_max_help.toolTip())
         self.assertEqual(self.window.theoretical_max_label.toolTip(), "")
+
+    def test_unaligned_help_stays_next_to_score_at_different_widths(self):
+        for width in (760, 980, 1280):
+            self.window.resize(width, 940)
+            self.window.show()
+            self.app.processEvents()
+            label = self.window.theoretical_max_label
+            button = self.window.theoretical_max_help
+            self.assertTrue(label.text().endswith("）"))
+            self.assertLessEqual(label.width(), label.sizeHint().width())
+            gap = button.x() - (label.x() + label.width())
+            self.assertGreaterEqual(gap, 0)
+            self.assertLessEqual(gap, 8)
+
+    def test_unaligned_help_quick_hover_and_persistent_click(self):
+        self.window.show()
+        self.app.processEvents()
+        button = self.window.theoretical_max_help
+        self.app.sendEvent(button, QEvent(QEvent.Type.Leave))
+        self.app.sendEvent(button, QEvent(QEvent.Type.Enter))
+        self.assertEqual(button.hover_timer.interval(), 150)
+        self.assertFalse(button.popup.isVisible())
+        QTest.qWait(200)
+        self.assertTrue(button.popup.isVisible())
+        self.assertEqual(button.help_label.text(), button.toolTip())
+        self.app.sendEvent(button, QEvent(QEvent.Type.Leave))
+        self.assertFalse(button.popup.isVisible())
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.app.sendEvent(button, QEvent(QEvent.Type.Leave))
+        QTest.qWait(200)
+        self.assertTrue(button.isChecked())
+        self.assertTrue(button.popup.isVisible())
+        self.assertFalse(button.hover_timer.isActive())
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.assertFalse(button.popup.isVisible())
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        QTest.keyClick(button, Qt.Key.Key_Escape)
+        self.assertFalse(button.isChecked())
+        self.assertFalse(button.popup.isVisible())
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.window.hide()
+        self.assertFalse(button.popup.isVisible())
 
     def test_minimum_window_width_does_not_require_page_horizontal_scroll(self):
         self.window.resize(760, 940)
@@ -617,8 +726,8 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_strategy_defaults_ranges_manual_input_and_parameter_forwarding(self):
         self.assertEqual(self.window.target.value(), 30)
-        expected = {"recovery": (.66, 1),
-                    "tuning_weight": (1, 1_000_000), "experience_weight": (1, 1_000_000),
+        expected = {"recovery": (.7, 1), "tuning_recovery": (.3, 1),
+                "tuning_weight": (1, 1_000_000), "experience_weight": (1.6, 1_000_000),
                     "embryo_weight": (1, 1_000_000)}
         for name, (value, maximum) in expected.items():
             box = self.window.strategy_inputs[name]
@@ -630,13 +739,13 @@ class EchoGuiTests(unittest.TestCase):
         recovery.selectAll()
         QTest.keyClicks(recovery, "0.75")
         QTest.keyClick(recovery, Qt.Key.Key_Return)
-        for name, value in [("tuning_weight", 2),
+        for name, value in [("tuning_recovery", .25), ("tuning_weight", 2),
                             ("experience_weight", 3), ("embryo_weight", 4)]:
             self.window.strategy_inputs[name].setValue(value)
         self.window.target.setValue(87)
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         planner = ControlledPlanner.instances[-1]
-        self.assertEqual(planner.params, {"recovery": .75,
+        self.assertEqual(planner.params, {"recovery": .75, "tuning_recovery": .25,
                                          "tuning_weight": 2, "experience_weight": 3,
                                          "embryo_weight": 4, "bins": 1000})
         self.assertEqual(planner.target, 87)
@@ -719,7 +828,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("建议停止", self.window.current_strategy.text())
         self.assertIn("0 词条达标概率下界基准", self.window.current_strategy.text())
         self.assertIn("非成本最优", self.window.current_strategy.text())
-        for text in ("分数网格近似", "0 词条基准", "占位", "失败经验", "调谐和胚子无回收"):
+        for text in ("分数网格近似", "0 词条基准", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
             self.assertIn(text, self.window.result_hint.text())
 
     def test_strategy_error_is_visible_without_affecting_scoring(self):
@@ -735,9 +844,10 @@ class EchoGuiTests(unittest.TestCase):
             box.setValue(-1)
             self.assertEqual(box.value(), 0)
         self.window.strategy_inputs["recovery"].setValue(2)
+        self.window.strategy_inputs["tuning_recovery"].setValue(2)
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         self.assertEqual(ControlledPlanner.instances[-1].params, {
-            "recovery": 1, "tuning_weight": 0,
+            "recovery": 1, "tuning_recovery": 1, "tuning_weight": 0,
             "experience_weight": 0, "embryo_weight": 0, "bins": 1000,
         })
 
@@ -819,7 +929,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                          f"\n单次尝试加权净成本：{amount(zero['attempt_cost'])}"
                          f"\n成功期望总加权净成本：{amount(zero['expected_cost'])}"
                          f"\n期望胚子：{amount(zero['expected_embryos'])}"
-                         f" · 调谐：{amount(zero['expected_tuning'])}"
+                         f" · 净开孔素材：{amount(zero['expected_tuning'])}"
                          f" · 净经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
         self.assertEqual(window.current_strategy.text(), interval(current) +
@@ -863,7 +973,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assertIn("已激活 0/5", window.summary.text())
 
             self.assertIn("完整激活概率区间：100.00% ～ 100.00%", window.zero_strategy.text())
-            self.assertIn("期望胚子：1 · 调谐：0 · 净经验：0", window.zero_strategy.text())
+            self.assertIn("期望胚子：1 · 净开孔素材：0 · 净经验：0", window.zero_strategy.text())
             self.assertIn("目标已达成，无需继续", window.current_strategy.text())
             self.assertIn("建议停止", window.current_strategy.text())
         finally:

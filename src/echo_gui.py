@@ -10,15 +10,16 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget, QToolButton,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from src.echo_costs import DEFAULT_COSTS, activation_defaults
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 
 
@@ -121,6 +122,67 @@ class CollapsibleSection(QFrame):
         self.toggle_button.setToolTip("点击折叠此区域" if expanded else "点击展开此区域")
         self.content.setVisible(expanded)
         self.updateGeometry()
+
+
+class InfoButton(QToolButton):
+    """快速悬停说明；点击固定，再次点击或按 Escape 收起。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setCheckable(True)
+        self.popup = QFrame(self, Qt.WindowType.ToolTip)
+        self.popup.setStyleSheet(
+            "QFrame { background: #f6f8fc; border: 1px solid #9aa9bd; border-radius: 6px; }"
+            "QLabel { color: #243247; border: none; font-size: 12px; }")
+        layout = QVBoxLayout(self.popup)
+        layout.setContentsMargins(12, 10, 12, 10)
+        self.help_label = QLabel()
+        self.help_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.help_label)
+        self.hover_timer = QTimer(self)
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.setInterval(150)
+        self.hover_timer.timeout.connect(self._show_help)
+        self.toggled.connect(self._set_pinned)
+
+    def _show_help(self) -> None:
+        self.help_label.setText(self.toolTip())
+        self.popup.adjustSize()
+        position = self.mapToGlobal(QPoint(0, self.height() + 4))
+        screen = self.screen().availableGeometry()
+        position.setX(max(screen.left(), min(position.x(), screen.right() - self.popup.width() + 1)))
+        if position.y() + self.popup.height() > screen.bottom() + 1:
+            position.setY(self.mapToGlobal(QPoint(0, 0)).y() - self.popup.height() - 4)
+        self.popup.move(position)
+        self.popup.show()
+
+    def _set_pinned(self, pinned: bool) -> None:
+        self.hover_timer.stop()
+        if pinned:
+            self._show_help()
+        else:
+            self.popup.hide()
+
+    def event(self, event: QEvent) -> bool:
+        # 保留 toolTip 文本供辅助功能读取，但不再触发系统的慢速、限时提示。
+        if event.type() == QEvent.Type.ToolTip:
+            return True
+        if event.type() == QEvent.Type.Enter and not self.isChecked():
+            self.hover_timer.start()
+        elif event.type() == QEvent.Type.Leave:
+            self.hover_timer.stop()
+            if not self.isChecked():
+                self.popup.hide()
+        elif event.type() == QEvent.Type.Hide:
+            self.hover_timer.stop()
+            self.setChecked(False)
+            self.popup.hide()
+        elif event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self.hover_timer.stop()
+            self.setChecked(False)
+            self.popup.hide()
+            return True
+        return super().event(event)
 
 
 class ManualWeightInput(QDoubleSpinBox):
@@ -238,6 +300,17 @@ class EchoWindow(QMainWindow):
         super().__init__()
         self.stats = load_json(DEFAULT_STATS)
         self.defaults = load_json(DEFAULT_WEIGHTS)
+        try:
+            cost_config = load_json(DEFAULT_COSTS)
+            self.cost_defaults = activation_defaults(cost_config)
+            if any(value > 1_000_000 or abs(round(value, 4) - value) > 1e-8
+                   for value in self.cost_defaults.values()):
+                raise ValueError("GUI 成本默认值支持 0～1000000，最多四位小数")
+            self.cost_defaults_note = str(cost_config.get("default_weights_note", ""))
+        except (OSError, ValueError, TypeError) as exc:
+            # 成本配置不可用时仍可评分；具体策略错误由后台计算单独报告。
+            self.cost_defaults = activation_defaults({})
+            self.cost_defaults_note = f"成本默认配置不可用，暂用兼容默认值：{exc}"
         default_scorer = EchoScorer(self.stats, self.defaults)
         self.defaults["main_stats"] = deepcopy(default_scorer.main_weights_by_cost)
         self.defaults["minor_stats"] = deepcopy(default_scorer.minor_weights_by_cost)
@@ -293,7 +366,7 @@ class EchoWindow(QMainWindow):
         title = QLabel("声骸词条综合工作台")
         title.setObjectName("title")
         layout.addWidget(title)
-        subtitle = QLabel("支持导入/手动权重 · 实时评分 · 开孔成功率计算 · 频整器洗练推荐")
+        subtitle = QLabel("支持导入/手动权重 · 实时评分 · 开孔达标概率计算 · 频整器洗练推荐")
         subtitle.setObjectName("muted")
         layout.addWidget(subtitle)
         self.sections: list[CollapsibleSection] = []
@@ -532,9 +605,9 @@ class EchoWindow(QMainWindow):
         toolbar.addWidget(self.target)
         self.theoretical_max_label = QLabel("对齐最高分：—")
         self.theoretical_max_label.setObjectName("muted")
-        self.theoretical_max_label.setWordWrap(True)
-        toolbar.addWidget(self.theoretical_max_label, 1)
-        self.theoretical_max_help = QToolButton()
+        self.theoretical_max_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(self.theoretical_max_label)
+        self.theoretical_max_help = InfoButton()
         self.theoretical_max_help.setText("?")
         self.theoretical_max_help.setAccessibleName("未对齐分数说明")
         self.theoretical_max_help.setToolTip(
@@ -592,15 +665,21 @@ class EchoWindow(QMainWindow):
         self.cost_divider = self._divider()
         layout.addWidget(self.cost_divider)
         self.cost_parameters_label = QLabel("成本估算相关参数")
+        self.cost_parameters_label.setToolTip(
+            "用户提供成本：每次开孔 10 个素材；经验按 500 为最小单位投入，余量保留。\n"
+            "强化和开孔不会失败；只有主动弃置回收才返还，经验默认 70%、开孔素材默认 30%。\n"
+            "经验向下取整到 500，开孔素材按个向下取整；不含货币及胚子获取成本。\n"
+            + self.cost_defaults_note)
         layout.addWidget(self.cost_parameters_label)
         parameters = QGridLayout()
         self.cost_parameters_layout = parameters
         self.strategy_inputs: dict[str, QDoubleSpinBox] = {}
         for index, (name, text, default, maximum) in enumerate([
-            ("recovery", "失败经验回收系数", .66, 1),
-            ("tuning_weight", "调谐权重", 1, 1_000_000),
-            ("experience_weight", "经验权重", 1, 1_000_000),
-            ("embryo_weight", "胚子权重", 1, 1_000_000),
+            ("recovery", "经验回收比例", self.cost_defaults["recovery"], 1),
+            ("tuning_recovery", "打孔器回收比例", self.cost_defaults["tuning_recovery"], 1),
+            ("tuning_weight", "打孔器权重", self.cost_defaults["tuning_weight"], 1_000_000),
+            ("experience_weight", "每1000经验权重", self.cost_defaults["experience_weight"], 1_000_000),
+            ("embryo_weight", "胚子权重", self.cost_defaults["embryo_weight"], 1_000_000),
         ]):
             box = self._number(default, manual_only=True)
             box.setMaximum(maximum)
@@ -612,6 +691,16 @@ class EchoWindow(QMainWindow):
             parameters.addWidget(caption, 0, index)
             parameters.addWidget(box, 1, index)
             parameters.setColumnStretch(index, 1)
+        self.strategy_inputs["recovery"].setToolTip(
+            "弃置回收时返还经验，实际有损耗略小于70%。\n"
+            "成本模型假设未达标且停止投入时选择回收。\n"
+            "按累计实际投入经验计算后向下取整到 500，不影响开孔素材回收比例。")
+        self.strategy_inputs["tuning_recovery"].setToolTip(
+            "打孔器回收，默认 30%：每开孔消耗 10 个，主动回收返还 3 个。\n"
+            "按累计已用开孔素材计算后向下取整到整数个，不影响经验回收比例。")
+        self.strategy_inputs["experience_weight"].setToolTip(
+            "每 1000 点经验的成本权重，缺少密音筒可提高。\n"
+            + self.cost_defaults_note)
         layout.addLayout(parameters)
         self.strategy_status = QLabel("策略等待计算")
         self.strategy_status.setObjectName("status")
@@ -621,17 +710,17 @@ class EchoWindow(QMainWindow):
         self.zero_strategy = QLabel("—")
         self.current_strategy = QLabel("—")
         strategy_results = QHBoxLayout()
-        for title, label in [("从零激活 · 成功率&成本估算", self.zero_strategy),
+        for title, label in [("从零激活 · 成功率、成本估算", self.zero_strategy),
                              ("当前词条 · 是否继续", self.current_strategy)]:
             panel = QGroupBox(title)
             panel_layout = QVBoxLayout(panel)
             metrics = QHBoxLayout()
             definitions = ([
                 ("zero_probability", "策略成功率 · 近似", "从零开始，按基准策略单次尝试成功的近似概率，不是完整激活概率。"),
-                ("zero_cost", "成功期望总净成本", "反复尝试直到成功的总加权净成本；材料成本仍为占位。"),
+                ("zero_cost", "成功期望总净成本", "反复尝试直到达标的总加权净成本；假设未达标且停止投入时主动弃置回收，达标保留。"),
             ] if label is self.zero_strategy else [
                 ("current_probability", "完整激活概率下界", "当前声骸继续开满后的达标概率下界，不是相对基准策略成功率。"),
-                ("future_cost", "后续加权净成本", "当前词条按基准策略继续的后续加权净成本，不代表成本最优。"),
+                ("future_cost", "后续加权净成本", "当前词条按规则继续的后续加权净成本；假设未达标停止时主动弃置回收，仅保留不回收时不适用；不代表成本最优。"),
             ])
             self._metric_cards(metrics, definitions, self.strategy_metrics)
             panel_layout.addLayout(metrics)
@@ -644,7 +733,11 @@ class EchoWindow(QMainWindow):
         self.result_hint = QLabel(
             "分数网格近似：当前完整激活概率下界与 0 词条基准比较；达到或超过基准且下界大于 0 才推荐继续。"
             "相对基准策略成功率（近似）与完整激活概率不是同一指标，推荐不是成本最优。"
-            "材料成本为占位；回收仅作用于失败经验，调谐和胚子无回收。"
+            "成本按用户提供数据：5/10/15/20/25 级各开孔一次，每次 10 个素材；升级经验按 500 单位累计补足，余量保留。"
+            "强化和开孔不会失败；只有主动弃置回收时，经验默认返还 70%，开孔素材默认返还 30%；经验向下取整到 500、素材按个向下取整。"
+            "成本模型假设未达标且停止投入时选择回收、达标保留；仅保留不回收时不应抵扣返还。"
+            "当前后续净成本含既有材料的弃置回收，可能为负；调成本权重不改变推荐，未计货币与胚子获取成本。"
+            "经验成本按每 1000 点经验权重折算，净经验数量仍按实际点数展示。"
             "从零成本包含反复尝试至成功的总加权净成本；胚子期望为 1/p。"
             "分数不是伤害提升百分比。")
         self.result_hint.setObjectName("muted")
@@ -1193,7 +1286,7 @@ class EchoWindow(QMainWindow):
         zero_text = (interval(zero) + f"\n单次尝试加权净成本：{amount(zero['attempt_cost'])}"
                      f"\n成功期望总加权净成本：{amount(zero['expected_cost'])}"
                      f"\n期望胚子：{amount(zero['expected_embryos'])}"
-                     f" · 调谐：{amount(zero['expected_tuning'])}"
+                     f" · 净开孔素材：{amount(zero['expected_tuning'])}"
                      f" · 净经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
         current_text = (interval(current)

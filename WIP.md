@@ -10,7 +10,7 @@ WWEcho/
 ├── .vscode/
 │   └── tasks.json                ## VS Code 任务：启动声骸评分 GUI
 ├── config/
-│   ├── activation-costs.json     ## 激活成本参数（占位数据，非实际游戏消耗）
+│   ├── activation-costs.json     ## 用户提供的激活消耗、弃置回收与默认成本权重
 │   ├── echo-stats.json           ## 基本参数：声骸词条定义、主词条满级值、副词条档位与概率
 │   └── score-weights.json        ## 评分权重：主/副词条默认评分权重（占位值，可自定义）
 ├── docs/
@@ -21,6 +21,7 @@ WWEcho/
 ├── examples/
 │   └── echo.json                 ## 声骸输入示例
 ├── src/
+│   ├── echo_costs.py             ## 轻量成本配置：GUI 与策略共用的默认值和校验
 │   ├── echo_score.py             ## 评分核心、输入校验及 JSON 命令行入口
 │   ├── echo_strategy.py          ## 激活策略分析：概率上下界、阈值决策及成本估算
 │   ├── echo_reconstruction.py    ## 频整器：精确离散锁法分析与固定锁法预算比较
