@@ -15,7 +15,10 @@ from unittest.mock import patch
 from PySide6.QtCore import QPoint, QPointF, QThread, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton, QTabWidget
+from PySide6.QtWidgets import (
+    QApplication, QDoubleSpinBox, QGridLayout, QHBoxLayout, QPushButton,
+    QTabWidget, QToolButton,
+)
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
 
@@ -163,14 +166,16 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_score_results_directly_below_target_before_strategy_parameters(self):
         layout = self.window.score_label.parentWidget().layout()
-        self.assertIs(layout.itemAt(0).layout().itemAt(1).widget(), self.window.target)
-        self.assertIs(layout.itemAt(1).layout().itemAt(0).widget(), self.window.score_label)
-        self.assertIs(layout.itemAt(2).widget(), self.window.progress_status)
-        self.assertIs(layout.itemAt(3).widget(), self.window.progress)
-        self.assertIs(layout.itemAt(5).widget(), self.window.details)
-        self.assertIs(layout.itemAt(6).widget(), self.window.cost_divider)
-        self.assertEqual(layout.itemAt(7).widget().text(), "成本估算相关参数")
-        self.assertIs(layout.itemAt(8).layout(), self.window.cost_parameters_layout)
+        self.assertEqual(layout.itemAt(0).widget().text(),
+                         "可自由设置目标分数，系统将据此进行开孔推荐。")
+        self.assertIs(layout.itemAt(1).layout().itemAt(1).widget(), self.window.target)
+        self.assertIs(layout.itemAt(2).layout().itemAt(0).widget(), self.window.score_label)
+        self.assertIs(layout.itemAt(3).widget(), self.window.progress_status)
+        self.assertIs(layout.itemAt(4).widget(), self.window.progress)
+        self.assertIs(layout.itemAt(6).widget(), self.window.details)
+        self.assertIs(layout.itemAt(7).widget(), self.window.cost_divider)
+        self.assertEqual(layout.itemAt(8).widget().text(), "成本估算相关参数")
+        self.assertIs(layout.itemAt(9).layout(), self.window.cost_parameters_layout)
 
     def test_cost_parameters_use_four_equal_columns(self):
         grid = self.window.cost_parameters_layout
@@ -217,8 +222,10 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_stats_divider_and_clear_button_style(self):
         layout = self.window.stats_divider.parentWidget().layout()
-        self.assertIs(layout.itemAt(1).widget(), self.window.stats_divider)
-        self.assertIs(layout.itemAt(2).layout(), self.window.sub_options_layout)
+        self.assertEqual(layout.itemAt(0).widget().text(), "直接点击词条名进行勾选，再次点击可取消勾选。")
+        self.assertIs(layout.itemAt(2).widget(), self.window.stats_divider)
+        self.assertIs(layout.itemAt(3).layout(), self.window.sub_options_layout)
+        self.assertEqual(self.window.minor_stat_label.contentsMargins().left(), 8)
         self.assertEqual(self.window.clear_sub_stats_button.objectName(), "clearSelection")
         self.assertEqual(self.window.width(), 980)
 
@@ -237,13 +244,33 @@ class EchoGuiTests(unittest.TestCase):
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
 
     def test_score_table_highlights_contributions_and_aligns_numbers(self):
+        short_table_height = self.window.details.height()
+        self.choose_example()
         self.assertTrue(self.window.details.alternatingRowColors())
         self.assertFalse(self.window.details.showGrid())
+        expected_height = (
+            self.window.details.horizontalHeader().sizeHint().height()
+            + self.window.details.rowCount()
+            * self.window.details.verticalHeader().defaultSectionSize()
+            + 2 * self.window.details.frameWidth())
+        self.assertEqual(self.window.details.height(), expected_height)
+        self.assertGreater(self.window.details.height(), short_table_height)
+        self.assertEqual(
+            self.window.details.verticalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.assertEqual(self.window.details.rowCount(), 7)
         for row in range(self.window.details.rowCount()):
             cell = self.window.details.item(row, 4)
             self.assertTrue(cell.font().bold())
             self.assertTrue(cell.textAlignment() & Qt.AlignmentFlag.AlignRight)
             self.assertEqual(cell.foreground().color().name(), "#2456a6")
+
+    def test_unaligned_help_uses_circular_question_button(self):
+        self.assertIsInstance(self.window.theoretical_max_help, QToolButton)
+        self.assertEqual(self.window.theoretical_max_help.text(), "?")
+        self.assertEqual(self.window.theoretical_max_help.accessibleName(), "未对齐分数说明")
+        self.assertIn("未对齐分数 =", self.window.theoretical_max_help.toolTip())
+        self.assertEqual(self.window.theoretical_max_label.toolTip(), "")
 
     def test_minimum_window_width_does_not_require_page_horizontal_scroll(self):
         self.window.resize(760, 940)
@@ -253,7 +280,7 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_strategy_results_share_one_row_with_equal_columns(self):
         layout = self.window.score_label.parentWidget().layout()
-        results = layout.itemAt(10).layout()
+        results = layout.itemAt(11).layout()
         self.assertIsInstance(results, QHBoxLayout)
         self.assertEqual(results.count(), 2)
         self.assertIs(results.itemAt(0).widget(), self.window.zero_strategy.parentWidget())

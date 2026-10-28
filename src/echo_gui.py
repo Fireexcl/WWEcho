@@ -15,7 +15,7 @@ from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget,
+    QProgressBar, QPushButton, QScrollArea, QSpinBox, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -521,7 +521,7 @@ class EchoWindow(QMainWindow):
     def _results_panel(self) -> QGroupBox:
         group = QGroupBox("03  目标与计算结果")
         layout = QVBoxLayout(group)
-        hint = QLabel("根据所选 Cost、主词条和副词条档位计算评分，并与目标分数对比。")
+        hint = QLabel("可自由设置目标分数，系统将据此进行开孔推荐。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -530,14 +530,27 @@ class EchoWindow(QMainWindow):
         self.target = self._number(30)
         self.target.valueChanged.connect(self.calculate)
         toolbar.addWidget(self.target)
-        self.theoretical_max_label = QLabel("理论最高分：—")
+        self.theoretical_max_label = QLabel("对齐最高分：—")
         self.theoretical_max_label.setObjectName("muted")
         self.theoretical_max_label.setWordWrap(True)
-        self.theoretical_max_label.setToolTip(
-            "未对齐最高分 = 所有 Cost 中最大的主词条与固定小词条原始贡献之和，"
-            "加上贡献最高的 5 种不同满档副词条；对齐后最高 50 分。"
-            "主词条与小词条按同一 Cost 配对，不受当前选择限制；全零权重时为 0 分。")
         toolbar.addWidget(self.theoretical_max_label, 1)
+        self.theoretical_max_help = QToolButton()
+        self.theoretical_max_help.setText("?")
+        self.theoretical_max_help.setAccessibleName("未对齐分数说明")
+        self.theoretical_max_help.setToolTip(
+            "未对齐分数 = 原始权重和档位数值下声骸的原始分数\n"
+            "未对齐最高分 = 理想中全顶分最高档词条的原始分数\n"
+            "对齐分数 = 未对齐分数折算到满分50分时的分数\n"
+            "对齐最高分 = 满分50分")
+        self.theoretical_max_help.setAutoRaise(True)
+        self.theoretical_max_help.setFixedSize(20, 20)
+        self.theoretical_max_help.setStyleSheet(
+            "QToolButton { border: 1px solid #9aa9bd; border-radius: 10px; "
+            "padding: 0; color: #65758b; font-size: 12px; font-weight: 600; }"
+            "QToolButton:hover { background: #edf3ff; border-color: #2563eb; "
+            "color: #2563eb; }"
+            "QToolButton:focus { border: 1px solid #2563eb; }")
+        toolbar.addWidget(self.theoretical_max_help)
         toolbar.addStretch()
         button = QPushButton("计算评分")
         button.setObjectName("primary")
@@ -573,8 +586,8 @@ class EchoWindow(QMainWindow):
         self.details.verticalHeader().hide()
         self.details.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.details.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.details.setMinimumHeight(170)
-        self.details.setMaximumHeight(210)
+        self.details.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.details.setMinimumHeight(0)
         layout.addWidget(self.details)
         self.cost_divider = self._divider()
         layout.addWidget(self.cost_divider)
@@ -608,7 +621,7 @@ class EchoWindow(QMainWindow):
         self.zero_strategy = QLabel("—")
         self.current_strategy = QLabel("—")
         strategy_results = QHBoxLayout()
-        for title, label in [("从零激活 · 反复尝试至成功", self.zero_strategy),
+        for title, label in [("从零激活 · 成功率&成本估算", self.zero_strategy),
                              ("当前词条 · 是否继续", self.current_strategy)]:
             panel = QGroupBox(title)
             panel_layout = QVBoxLayout(panel)
@@ -1077,6 +1090,7 @@ class EchoWindow(QMainWindow):
             self.score_label.setText("—")
             self.summary.setText(f"输入有误：{exc}")
             self.details.setRowCount(0)
+            self._resize_details_table()
             self.progress.setValue(0)
             self._update_progress_status(unavailable="输入有误")
             self.strategy_status.setText("策略输入无效")
@@ -1093,6 +1107,7 @@ class EchoWindow(QMainWindow):
         self._update_progress_status()
         entries = [("主词条", result["main_stat"]), ("小词条", result["minor_stat"])] + [("副词条", item) for item in result["sub_stats"]]
         self.details.setRowCount(len(entries))
+        self._resize_details_table()
         for row, (category, item) in enumerate(entries):
             values = [category, item["name"], self._format_value(item["stat_id"], item["value"]),
                       f"{item['weight']:g}", f"{item['score']:g}"]
@@ -1110,6 +1125,12 @@ class EchoWindow(QMainWindow):
         }))
         self.strategy_status.setText("策略等待后台计算（评分已更新）")
         self._strategy_timer.start()
+
+    def _resize_details_table(self) -> None:
+        row_height = self.details.verticalHeader().defaultSectionSize()
+        header_height = self.details.horizontalHeader().sizeHint().height()
+        height = header_height + self.details.rowCount() * row_height + 2 * self.details.frameWidth()
+        self.details.setFixedHeight(height)
 
     def _update_progress_status(self, current: dict[str, Any] | None = None,
                                 *, unavailable: str = "推荐计算中") -> None:
