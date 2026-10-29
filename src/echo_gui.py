@@ -15,7 +15,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QThreadPool, QTim
 from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
-    QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox,
+    QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -392,10 +392,10 @@ class EchoWindow(QMainWindow):
         return line
 
     @staticmethod
-    def _metric_cards(layout: QHBoxLayout, definitions: list[tuple[str, str, str]],
+    def _metric_cards(layout: QLayout, definitions: list[tuple[str, str, str]],
                       labels: dict[str, QLabel]) -> None:
         """用明确口径的标题搭配大数字；保持纯文本，不插入外部 HTML。"""
-        for key, title, hint in definitions:
+        for index, (key, title, hint) in enumerate(definitions):
             card = QFrame()
             card.setObjectName("metricCard")
             card.setToolTip(hint)
@@ -413,7 +413,11 @@ class EchoWindow(QMainWindow):
             content.addWidget(caption)
             content.addWidget(value)
             labels[key] = value
-            layout.addWidget(card, 1)
+            if isinstance(layout, QGridLayout):
+                layout.addWidget(card, index // 2, index % 2)
+                layout.setColumnStretch(index % 2, 1)
+            else:
+                layout.addWidget(card, 1)
 
     @staticmethod
     def _set_metric(label: QLabel, text: str = "—", tone: str = "muted") -> None:
@@ -715,14 +719,17 @@ class EchoWindow(QMainWindow):
         for title, label in [("从零激活 · 成功率、成本估算", self.zero_strategy),
                              ("当前词条 · 是否继续", self.current_strategy)]:
             panel = QGroupBox(title)
+            panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
             panel_layout = QVBoxLayout(panel)
-            metrics = QHBoxLayout()
+            metrics = QGridLayout() if label is self.zero_strategy else QHBoxLayout()
             definitions = ([
-                ("zero_probability", "有弃置时单次成功率", "从新胚子开始，按材料权重选择平均累计成本较低的继续或弃置动作；达标后必须开满五条，近似计算最终成功的概率。"),
-                ("zero_cost", "成功达标时累计成本", "反复换胚子直到开满五条并达标的平均累计成本，包含达标后的剩余经验和打孔器、此前弃置投入并扣除回收；不是保证花费。"),
+                ("zero_probability", "单个胚子成功率", "从新胚子开始，按材料权重选择继续或弃置；达标后必须开满五条。此概率表示单个胚子最终成功的近似概率。"),
+                ("zero_embryos", "消耗胚子", "反复尝试直到成功所需胚子的平均数量；不是保证数量。"),
+                ("zero_tuning", "消耗打孔器", "反复尝试直到成功所需打孔器的平均数量，已计入弃置回收；不是保证数量。"),
+                ("zero_gold_tubes", "消耗金密音筒", "金密音筒按每个 5000 点经验折算；显示反复尝试直到成功所需的平均数量。"),
             ] if label is self.zero_strategy else [
-                ("current_probability", "开完剩余词条达标概率", "不中途弃置，开完此胚子剩余词条的达标概率；范围来自计算误差，不是概率本身会浮动。"),
-                ("future_cost", "此胚子后续平均成本", "按建议处理当前胚子直到开满五条并达标或弃置的平均成本；提前达标仍计入开满所需经验和打孔器，不含换新胚子的费用。"),
+                ("current_probability", "后续成功率", "按当前策略处理此胚子，最终成功的近似概率。"),
+                ("current_cost", "后续平均成本", "按建议处理当前胚子直到开满五条并达标或弃置的平均成本；提前达标仍计入开满所需经验和打孔器，不含换新胚子的费用。"),
             ])
             self._metric_cards(metrics, definitions, self.strategy_metrics)
             panel_layout.addLayout(metrics)
@@ -733,19 +740,16 @@ class EchoWindow(QMainWindow):
             strategy_results.addWidget(panel, 1)
         layout.addLayout(strategy_results)
         self.result_hint = QLabel(
-            "同一状态、同一开法的概率本身是固定的；显示范围来自分数取整造成的计算误差，不是概率会浮动。"
-            "推荐规则：按当前材料权重，比较继续培养、按后续结果决策的累计成本，与弃置回收后换新胚子做到成功的累计成本，选择较低的一项。"
-            "目标是降低反复尝试到一个达标成品的平均成本，不是最大化单个胚子成功率；成功率和材料消耗可能随权重改变。\n"
-            "分数达标后仍必须升至 +25 并开满五条，不允许提前结束；成功成本包含剩余经验和打孔器。"
-            "成本按用户提供数据：5/10/15/20/25 级各开孔一次，每次 10 个打孔器；升级经验按 500 单位累计补足，余量保留。"
-            "强化和开孔不会失败；只有主动弃置回收时，经验默认返还 70%，打孔器默认返还 30%；经验向下取整到 500、打孔器按个向下取整。"
-            "成本假设未达标且停止投入时选择回收；达标后继续开满并保留，不回收；仅保留不回收时不能扣除返还。\n"
-            "成本和材料数量都是平均值，并非保证花费；材料已扣除弃置回收，负成本表示返还多于后续投入。"
-            "成功达标时累计成本包含反复换胚子直到开满五条并达标的全部投入；此胚子后续平均成本只算当前这一件。"
-            "两个动作的比较成本及从当前到成品的累计成本包含后续换胚子，不用当前件成本除以当前件成功率。"
-            "经验按原始点数显示，成本按每 1000 点经验权重折算；修改成本权重或回收比例会重新优化推荐，未计货币与主词条刷取成本。"
-            "最省成本仅针对当前分数网格与成本模型，不代表精确游戏最优；当前精度未确认正成功机会时不提供有限累计成本。"
-            "分数不是伤害提升百分比。")
+            "推荐规则：按当前材料权重，比较继续培养的累计成本，与弃置回收后新胚子做到成功的累计成本，选择较低的一项。"
+            "目标是降低反复尝试到一个达标成品的平均成本，成功率和材料消耗可能随权重改变。\n"
+            "弃置时经验默认返还 70%，由于向下取整到500实际比例略低，打孔器默认返还 30%。\n"
+            # "成本和材料数量都是平均值，并非保证花费；材料已扣除弃置回收，负成本表示返还多于后续投入。"
+            # "成功达标时累计成本包含反复换胚子直到开满五条并达标的全部投入；此胚子后续平均成本只算当前这一件。"
+            # "两个动作的比较成本及从当前到成品的平均累计成本包含后续换胚子，不用当前件成本除以当前件成功率。"
+            # "经验按原始点数显示，成本按每 1000 点经验权重折算；修改成本权重或回收比例会重新优化推荐，未计货币与主词条刷取成本。"
+            # "最省成本仅针对当前分数网格与成本模型，不代表精确游戏最优；当前精度未确认正成功机会时不提供有限累计成本。"
+            # "分数不是伤害提升百分比。"
+            )
         self.result_hint.setObjectName("muted")
         self.result_hint.setWordWrap(True)
         layout.addWidget(self.result_hint)
@@ -1302,44 +1306,43 @@ class EchoWindow(QMainWindow):
         def probability_range(item: dict[str, Any]) -> str:
             return f"{item['full_success_lower']:.2%} ～ {item['full_success_upper']:.2%}"
 
-        def interval(item: dict[str, Any], title: str, policy_title: str) -> str:
-            return (f"{title}：{probability_range(item)}（估算范围）\n"
-                    f"{policy_title}：{item['success_probability']:.2%}（近似）")
-
-        def amount(value: Any) -> str:
+        def amount(value: Any, decimals: int = 2) -> str:
             if value is None:
                 return "无法获得 / ∞"
-            text = f"{value:.2f}".rstrip("0").rstrip(".")
+            text = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
             return "0" if text == "-0" else text
 
         zero, current = result["zero"], result["current"]
-        zero_text = (interval(zero, "一次性开五条达标概率", "有弃置时单次成功率")
-                     + f"\n单个胚子成功或弃置时的平均成本：{amount(zero['attempt_cost'])}"
-                     f"\n成功达标时累计成本：{amount(zero['expected_cost'])}"
-                     f"\n预计累计消耗 · 胚子：{amount(zero['expected_embryos'])}"
-                     f" · 打孔器：{amount(zero['expected_tuning'])}"
-                     f" · 经验：{amount(zero['expected_experience'])}")
-        recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
+        zero_text = (f"成功达标时累计成本：{amount(zero['expected_cost'])}"
+                 f"\n单个胚子成功或弃置时平均成本：{amount(zero['attempt_cost'])}"
+                 f"\n一次性开五条达标概率：{probability_range(zero)}（估算范围）")
+        recommendation = "建议继续" if current["recommend_continue"] else "建议放弃"
         continue_cost = "—" if current["continue_cost"] is None else amount(current["continue_cost"])
         restart_cost = "—" if current["restart_cost"] is None else amount(current["restart_cost"])
-        current_text = (interval(current, "开完剩余词条达标概率", "此胚子后续成功率")
-                + f"\n{recommendation}（按材料权重比较累计成本）"
-                        f"\n原因：{current['reason']}"
-                f"\n继续培养到成功的平均成本：{continue_cost}"
-                f"\n弃置重开到成功的平均成本：{restart_cost}"
-                f"\n从当前到成品的平均累计成本：{amount(current['expected_total_cost'])}"
-                        f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
+        current_text = (f"{recommendation}（按材料权重比较累计成本）"
+                f"\n原因：{current['reason']}"
+                f"\n继续成本：{continue_cost}"
+                f"\n弃置成本：{restart_cost}"
+                f"\n开完剩余词条达标概率：{probability_range(current)}（估算范围）")
         status = "策略已更新 · 累计成本策略（概率和成本为近似计算）"
         self.zero_strategy.setText(zero_text)
         self.current_strategy.setText(current_text)
         self.strategy_status.setText(status)
         self._set_metric(self.strategy_metrics["zero_probability"], f"{zero['success_probability']:.2%}", "accent")
-        cost = zero["expected_cost"]
-        self._set_metric(self.strategy_metrics["zero_cost"], "不可达 / ∞" if cost is None else amount(cost),
-                 "muted" if cost is None else "accent")
-        self._set_metric(self.strategy_metrics["current_probability"], probability_range(current), "accent")
+        for key, field in (("zero_embryos", "expected_embryos"),
+                   ("zero_tuning", "expected_tuning")):
+            value = zero[field]
+            self._set_metric(self.strategy_metrics[key], "不可达 / ∞" if value is None else amount(value),
+                     "muted" if value is None else "accent")
+        experience = zero["expected_experience"]
+        tubes = None if experience is None else experience / 5000
+        self._set_metric(self.strategy_metrics["zero_gold_tubes"],
+                         "不可达 / ∞" if tubes is None else amount(tubes, decimals=4),
+                 "muted" if tubes is None else "accent")
+        self._set_metric(self.strategy_metrics["current_probability"],
+                 f"{current['success_probability']:.2%}", "accent")
         cost = current["future_cost"]
-        self._set_metric(self.strategy_metrics["future_cost"], "不可达 / ∞" if cost is None else amount(cost),
+        self._set_metric(self.strategy_metrics["current_cost"], "不可达 / ∞" if cost is None else amount(cost),
                  "muted" if cost is None else "accent")
         self._update_progress_status(current)
 

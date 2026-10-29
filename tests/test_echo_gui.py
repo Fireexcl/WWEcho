@@ -302,21 +302,25 @@ class EchoGuiTests(unittest.TestCase):
         self.window._display_strategy(strategy_result())
         metrics = self.window.strategy_metrics
         self.assertEqual(metrics["zero_probability"].text(), "25.00%")
-        self.assertEqual(metrics["zero_cost"].text(), "32")
-        self.assertEqual(metrics["current_probability"].text(), "10.00% ～ 20.00%")
-        self.assertEqual(metrics["future_cost"].text(), "3")
+        self.assertEqual(metrics["zero_embryos"].text(), "4")
+        self.assertEqual(metrics["zero_tuning"].text(), "20")
+        self.assertEqual(metrics["zero_gold_tubes"].text(), "0.002")
+        self.assertEqual(metrics["current_probability"].text(), "5.00%")
+        self.assertEqual(metrics["current_cost"].text(), "3")
         self.window._display_strategy(strategy_result(unavailable=True))
-        self.assertEqual(metrics["zero_cost"].text(), "不可达 / ∞")
-        self.assertEqual(metrics["zero_cost"].property("tone"), "muted")
+        self.assertEqual(metrics["zero_embryos"].text(), "不可达 / ∞")
+        self.assertEqual(metrics["zero_embryos"].property("tone"), "muted")
         self.window.target.setValue(41)
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
 
     def test_strategy_metric_titles_use_plain_language(self):
         expected = {
-            "zero_probability": "有弃置时单次成功率",
-            "zero_cost": "成功达标时累计成本",
-            "current_probability": "开完剩余词条达标概率",
-            "future_cost": "此胚子后续平均成本",
+            "zero_probability": "单个胚子成功率",
+            "zero_embryos": "消耗胚子",
+            "zero_tuning": "消耗打孔器",
+            "zero_gold_tubes": "消耗金密音筒",
+            "current_probability": "后续成功率",
+            "current_cost": "后续平均成本",
         }
         for key, title in expected.items():
             card = self.window.strategy_metrics[key].parentWidget()
@@ -332,11 +336,11 @@ class EchoGuiTests(unittest.TestCase):
         result["current"]["future_cost"] = -12345.67
         self.window._display_strategy(result)
         text = self.window.zero_strategy.text()
-        self.assertIn("单个胚子成功或弃置时的平均成本：12345.67", text)
+        self.assertIn("单个胚子成功或弃置时平均成本：12345.67", text)
         self.assertIn("成功达标时累计成本：2345678.9", text)
-        self.assertIn("胚子：13.25 · 打孔器：98765.43 · 经验：1234567.89", text)
-        self.assertEqual(self.window.strategy_metrics["zero_cost"].text(), "2345678.9")
-        self.assertEqual(self.window.strategy_metrics["future_cost"].text(), "-12345.67")
+        self.assertIn("一次性开五条达标概率：30.00% ～ 40.00%", text)
+        self.assertEqual(self.window.strategy_metrics["zero_gold_tubes"].text(), "246.9136")
+        self.assertEqual(self.window.strategy_metrics["current_cost"].text(), "-12345.67")
         self.assertNotRegex(text, r"\d[eE][+-]?\d")
 
     def test_ui_replaces_old_jargon_without_hiding_approximation(self):
@@ -355,9 +359,9 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("估算范围", self.window.zero_strategy.text())
         self.assertIn("估算范围", self.window.current_strategy.text())
         self.assertNotIn("参考阈值", self.window.current_strategy.text())
-        self.assertIn("继续培养到成功的平均成本：36", self.window.current_strategy.text())
-        self.assertIn("弃置重开到成功的平均成本：25", self.window.current_strategy.text())
-        self.assertIn("从当前到成品的平均累计成本：25", self.window.current_strategy.text())
+        self.assertIn("建议放弃", self.window.current_strategy.text())
+        self.assertIn("继续成本：36", self.window.current_strategy.text())
+        self.assertIn("弃置成本：25", self.window.current_strategy.text())
 
     def test_score_table_highlights_contributions_and_aligns_numbers(self):
         short_table_height = self.window.details.height()
@@ -445,6 +449,20 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIs(results.itemAt(1).widget(), self.window.current_strategy.parentWidget())
         self.assertEqual(results.stretch(0), 1)
         self.assertEqual(results.stretch(1), 1)
+
+    def test_zero_activation_metrics_use_two_by_two_grid_and_match_panel_height(self):
+        layout = self.window.zero_strategy.parentWidget().layout()
+        metrics = layout.itemAt(0).layout()
+        self.assertIsInstance(metrics, QGridLayout)
+        self.assertEqual(metrics.count(), 4)
+        self.assertEqual([(metrics.getItemPosition(i)[0], metrics.getItemPosition(i)[1])
+                          for i in range(metrics.count())], [(0, 0), (0, 1), (1, 0), (1, 1)])
+        self.window.resize(980, 1000)
+        self.window.show()
+        self.app.processEvents()
+        zero_panel = self.window.zero_strategy.parentWidget()
+        current_panel = self.window.current_strategy.parentWidget()
+        self.assertEqual(zero_panel.height(), current_panel.height())
 
     def test_progress_uses_fixed_fifty_point_scale_when_target_changes(self):
         expected = int(self.window._score_result["score"] / 50 * 1000)
@@ -908,13 +926,14 @@ class EchoGuiTests(unittest.TestCase):
         ControlledPlanner.unavailable = True
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         self.assertIn("一次性开五条达标概率", self.window.zero_strategy.text())
-        self.assertIn("有弃置时单次成功率", self.window.zero_strategy.text())
+        self.assertIn("单个胚子成功率", self.window.zero_strategy.parentWidget().findChild(QLabel, "metricCaption").text())
         self.assertIn("开完剩余词条达标概率", self.window.current_strategy.text())
-        self.assertIn("此胚子后续成功率", self.window.current_strategy.text())
+        self.assertIn("后续成功率", self.window.current_strategy.parentWidget().findChild(QLabel, "metricCaption").text())
         self.assertIn("30.00% ～ 40.00%", self.window.zero_strategy.text())
-        self.assertIn("25.00%", self.window.zero_strategy.text())
-        self.assertEqual(self.window.zero_strategy.text().count("无法获得 / ∞"), 4)
-        self.assertIn("建议停止", self.window.current_strategy.text())
+        self.assertEqual(self.window.strategy_metrics["zero_probability"].text(), "25.00%")
+        self.assertEqual(self.window.current_strategy.text().count("无法获得 / ∞"), 0)
+        self.assertEqual(self.window.zero_strategy.text().count("无法获得 / ∞"), 1)
+        self.assertIn("建议放弃", self.window.current_strategy.text())
         self.assertIn("按材料权重比较累计成本", self.window.current_strategy.text())
         self.assertNotIn("参考阈值", self.window.current_strategy.text())
         for text in ("计算误差", "修改成本权重", "重新优化", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
@@ -1011,30 +1030,22 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             text = f"{value:.2f}".rstrip("0").rstrip(".")
             return "0" if text == "-0" else text
 
-        def interval(item, title, policy_title):
-            return (f"{title}：{item['full_success_lower']:.2%} ～ "
-                    f"{item['full_success_upper']:.2%}（估算范围）\n"
-                    f"{policy_title}：{item['success_probability']:.2%}（近似）")
-
         zero, current = result["zero"], result["current"]
         self.assertEqual(window.zero_strategy.text(),
-                         interval(zero, "一次性开五条达标概率", "有弃置时单次成功率") +
-                         f"\n单个胚子成功或弃置时的平均成本：{amount(zero['attempt_cost'])}"
-                         f"\n成功达标时累计成本：{amount(zero['expected_cost'])}"
-                         f"\n预计累计消耗 · 胚子：{amount(zero['expected_embryos'])}"
-                         f" · 打孔器：{amount(zero['expected_tuning'])}"
-                         f" · 经验：{amount(zero['expected_experience'])}")
-        recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
+                         f"成功达标时累计成本：{amount(zero['expected_cost'])}"
+                         f"\n单个胚子成功或弃置时平均成本：{amount(zero['attempt_cost'])}"
+                         f"\n一次性开五条达标概率：{zero['full_success_lower']:.2%} ～ "
+                         f"{zero['full_success_upper']:.2%}（估算范围）")
+        recommendation = "建议继续" if current["recommend_continue"] else "建议放弃"
         continue_cost = "—" if current["continue_cost"] is None else amount(current["continue_cost"])
         restart_cost = "—" if current["restart_cost"] is None else amount(current["restart_cost"])
         self.assertEqual(window.current_strategy.text(),
-                         interval(current, "开完剩余词条达标概率", "此胚子后续成功率") +
-                 f"\n{recommendation}（按材料权重比较累计成本）"
+             f"{recommendation}（按材料权重比较累计成本）"
                          f"\n原因：{current['reason']}"
-                 f"\n继续培养到成功的平均成本：{continue_cost}"
-                 f"\n弃置重开到成功的平均成本：{restart_cost}"
-                 f"\n从当前到成品的平均累计成本：{amount(current['expected_total_cost'])}"
-                         f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
+             f"\n继续培养到成功的平均成本：{continue_cost}"
+             f"\n弃置重开到成功的平均成本：{restart_cost}"
+             f"\n开完剩余词条达标概率：{current['full_success_lower']:.2%} ～ "
+             f"{current['full_success_upper']:.2%}（估算范围）")
         self.assertEqual(window.strategy_status.text(),
                  "策略已更新 · 累计成本策略（概率和成本为近似计算）")
         scored = window._strategy_cache["planner"].scorer.score(window.current_echo())
@@ -1073,11 +1084,13 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assertIn("已激活 0/5", window.summary.text())
 
             self.assertIn("一次性开五条达标概率：100.00% ～ 100.00%", window.zero_strategy.text())
-            self.assertIn("胚子：1 · 打孔器：50 · 经验：143000", window.zero_strategy.text())
+            self.assertEqual(window.strategy_metrics["zero_embryos"].text(), "1")
+            self.assertEqual(window.strategy_metrics["zero_tuning"].text(), "50")
+            self.assertEqual(window.strategy_metrics["zero_gold_tubes"].text(), "28.6")
             self.assertIn("开满剩余 5 条", window.current_strategy.text())
             self.assertIn("建议继续", window.current_strategy.text())
-            self.assertIn("此胚子后续平均成本：278.8", window.current_strategy.text())
-            self.assertNotIn("建议停止", window.current_strategy.text())
+            self.assertIn("继续成本：278.8", window.current_strategy.text())
+            self.assertNotIn("建议放弃", window.current_strategy.text())
         finally:
             window.close()
             window.deleteLater()
@@ -1177,7 +1190,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                             self.assertTrue(result["current"]["recommend_continue"])
                         else:
                             self.assertEqual(result["zero"]["success_probability"], 0)
-                            self.assertEqual(window.zero_strategy.text().count("无法获得 / ∞"), 4)
+                            self.assertEqual(window.zero_strategy.text().count("无法获得 / ∞"), 1)
                             self.assertFalse(result["current"]["recommend_continue"])
                     finally:
                         # 注入保持有效直到在途任务结束，避免影响后续测试。
