@@ -33,7 +33,8 @@ def strategy_result(reason="fake", *, unavailable=False):
                  "expected_experience": None if unavailable else 10},
         "current": {"full_success_lower": .1, "full_success_upper": .2,
                     "success_probability": .05, "recommend_continue": False,
-                    "baseline_success_lower": .3, "reason": reason, "future_cost": 3},
+                    "reason": reason, "future_cost": 3, "continue_cost": 36,
+                    "restart_cost": 25, "expected_total_cost": 25},
         "score_resolution": .1, "method": "fake-grid",
     }
 
@@ -353,7 +354,10 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("计算误差", self.window.result_hint.text())
         self.assertIn("估算范围", self.window.zero_strategy.text())
         self.assertIn("估算范围", self.window.current_strategy.text())
-        self.assertIn("保守估计", self.window.current_strategy.text())
+        self.assertNotIn("参考阈值", self.window.current_strategy.text())
+        self.assertIn("继续培养到成功的平均成本：36", self.window.current_strategy.text())
+        self.assertIn("弃置重开到成功的平均成本：25", self.window.current_strategy.text())
+        self.assertIn("从当前到成品的平均累计成本：25", self.window.current_strategy.text())
 
     def test_score_table_highlights_contributions_and_aligns_numbers(self):
         short_table_height = self.window.details.height()
@@ -499,7 +503,46 @@ class EchoGuiTests(unittest.TestCase):
         self.window.clear_sub_stats()
         self.assertEqual(self.window.progress_status.text(), "推荐计算中")
         self.window.target.setValue(0)
+        self.assertEqual(self.window.progress_status.text(), "分数达标 · 继续开满剩余 5 条")
+
+    def test_reached_but_unfinished_echo_never_shows_stop_or_finished(self):
+        self.window.target.setValue(0)
+        result = strategy_result()
+        result["current"]["recommend_continue"] = False
+        for count, name in enumerate(list(self.window.sub_stat_buttons)[:5]):
+            self.window._display_strategy(result)
+            self.assertEqual(self.window.progress_status.text(),
+                             f"分数达标 · 继续开满剩余 {5 - count} 条")
+            self.assertIn(f"仍需开满剩余 {5 - count} 条", self.window.summary.text())
+            self.assertIn("#16a34a", self.window.progress.styleSheet())
+            self.window.sub_stat_buttons[name].click()
         self.assertEqual(self.window.progress_status.text(), "达成目标")
+
+    def test_result_hint_requires_complete_five_slot_success(self):
+        hint = self.window.result_hint.text()
+        self.assertIn("达标后仍必须", hint)
+        self.assertIn("+25", hint)
+        self.assertIn("开满五条", hint)
+        self.assertIn("剩余经验和打孔器", hint)
+
+    def test_rounded_score_cannot_mark_unreached_echo_as_completed(self):
+        weights = self.window.current_weights()
+        for pool in weights["main_stats"].values():
+            for name in pool:
+                pool[name] = 0
+        for pool in weights["minor_stats"].values():
+            for name in pool:
+                pool[name] = 0
+        weights["main_stats"]["4"]["crit_rate"] = 1
+        weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+        weights["sub_stats"]["crit_dmg"] = .036
+        self.window.apply_weights(weights)
+        self.window.target.setValue(48.3389)
+        for name in ("hp_flat", "def_flat", "hp_pct", "def_pct", "energy_regen"):
+            self.window.sub_stat_buttons[name].click()
+        self.assertEqual(self.window._score_result["score"], 48.3389)
+        self.assertIn("未达目标", self.window.summary.text())
+        self.assertEqual(self.window.progress_status.text(), "下次好运")
 
     def test_weight_edit_and_restore(self):
         self.choose_example()
@@ -872,9 +915,9 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("25.00%", self.window.zero_strategy.text())
         self.assertEqual(self.window.zero_strategy.text().count("无法获得 / ∞"), 4)
         self.assertIn("建议停止", self.window.current_strategy.text())
-        self.assertIn("参考阈值：新胚子达标概率", self.window.current_strategy.text())
-        self.assertIn("不保证最省材料", self.window.current_strategy.text())
-        for text in ("计算误差", "参考阈值", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
+        self.assertIn("按材料权重比较累计成本", self.window.current_strategy.text())
+        self.assertNotIn("参考阈值", self.window.current_strategy.text())
+        for text in ("计算误差", "修改成本权重", "重新优化", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
             self.assertIn(text, self.window.result_hint.text())
 
     def test_strategy_error_is_visible_without_affecting_scoring(self):
@@ -982,19 +1025,25 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                          f" · 打孔器：{amount(zero['expected_tuning'])}"
                          f" · 经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
+        continue_cost = "—" if current["continue_cost"] is None else amount(current["continue_cost"])
+        restart_cost = "—" if current["restart_cost"] is None else amount(current["restart_cost"])
         self.assertEqual(window.current_strategy.text(),
                          interval(current, "开完剩余词条达标概率", "此胚子后续成功率") +
-                         f"\n参考阈值：新胚子达标概率 {current['baseline_success_lower']:.2%}（保守估计）"
-                         f"\n{recommendation}（按达标机会判断，不保证最省材料）"
+                 f"\n{recommendation}（按材料权重比较累计成本）"
                          f"\n原因：{current['reason']}"
+                 f"\n继续培养到成功的平均成本：{continue_cost}"
+                 f"\n弃置重开到成功的平均成本：{restart_cost}"
+                 f"\n从当前到成品的平均累计成本：{amount(current['expected_total_cost'])}"
                          f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
         self.assertEqual(window.strategy_status.text(),
-                         "策略已更新 · 概率和平均成本为近似计算")
+                 "策略已更新 · 累计成本策略（概率和成本为近似计算）")
         scored = window._strategy_cache["planner"].scorer.score(window.current_echo())
         self.assertEqual(window.score_label.text(), f"{scored['score']:g} 分")
         score, target = scored["score"], window.target.value()
         status = (f"已达目标 · 超出 {score - target:g} 分" if score >= target else
               f"未达目标 · 还差 {target - score:g} 分")
+        if score >= target and scored["activated_count"] < 5:
+            status += f" · 仍需开满剩余 {5 - scored['activated_count']} 条"
         self.assertEqual(window.summary.text(), status +
                  f"\n主词条 {scored['main_score']:g} 分 + 副词条 {scored['sub_score']:g} 分"
                  f" + 小词条 {scored['minor_score']:g} 分"
@@ -1024,9 +1073,55 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assertIn("已激活 0/5", window.summary.text())
 
             self.assertIn("一次性开五条达标概率：100.00% ～ 100.00%", window.zero_strategy.text())
-            self.assertIn("胚子：1 · 打孔器：0 · 经验：0", window.zero_strategy.text())
-            self.assertIn("目标已达成，无需继续", window.current_strategy.text())
-            self.assertIn("建议停止", window.current_strategy.text())
+            self.assertIn("胚子：1 · 打孔器：50 · 经验：143000", window.zero_strategy.text())
+            self.assertIn("开满剩余 5 条", window.current_strategy.text())
+            self.assertIn("建议继续", window.current_strategy.text())
+            self.assertIn("此胚子后续平均成本：278.8", window.current_strategy.text())
+            self.assertNotIn("建议停止", window.current_strategy.text())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_real_material_weight_change_rebuilds_planner_and_changes_recommendation(self):
+        window = EchoWindow()
+        try:
+            weights = window.current_weights()
+            for category in ("main_stats", "minor_stats"):
+                for cost, pool in weights[category].items():
+                    weights[category][cost] = dict.fromkeys(pool, 0)
+            weights["sub_stats"] = dict.fromkeys(weights["sub_stats"], 0)
+            weights["main_stats"]["4"]["crit_rate"] = 1
+            weights["sub_stats"]["crit_rate"] = 1
+            window.apply_weights(weights)
+            window.cost.setCurrentIndex(window.cost.findData(4))
+            window.main_stat.setCurrentIndex(window.main_stat.findData("crit_rate"))
+            window.target.setValue(40)
+            window.sub_stat_buttons["hp_flat"].click()
+            self.wait_for_strategy(window)
+
+            first = window._strategy_cache["planner"]
+            result = first.analyze(window.current_echo())
+            self.assertEqual(first.bins, 1000)
+            self.assertFalse(result["current"]["recommend_continue"])
+            self.assertEqual(window.progress_status.text(), "推荐放弃")
+            self.assert_results_match_api(window, result)
+            self.assertAlmostEqual(result["zero"]["expected_cost"], 404.6)
+            unchanged_score = window.score_label.text()
+
+            window.strategy_inputs["tuning_weight"].setValue(10)
+            window.strategy_inputs["embryo_weight"].setValue(0)
+            self.wait_for_strategy(window)
+            second = window._strategy_cache["planner"]
+            result = second.analyze(window.current_echo())
+            self.assertIsNot(first, second)
+            self.assertEqual(second.bins, 1000)
+            self.assertTrue(result["current"]["recommend_continue"])
+            self.assertEqual(window.progress_status.text(), "推荐继续")
+            self.assert_results_match_api(window, result)
+            self.assertAlmostEqual(result["zero"]["expected_cost"], 1398.88)
+            self.assertEqual(window.score_label.text(), unchanged_score)
+            self.assertLess(result["current"]["continue_cost"], result["current"]["restart_cost"])
         finally:
             window.close()
             window.deleteLater()
@@ -1044,7 +1139,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
                 class LowBinsPlanner(real_planner):
                     def __init__(self, scorer, costs, target, **params):
                         builds.append((threading.get_ident(), dict(params)))
-                        # 仅测试注入降低分辨率，仍执行真实构建/概率/阈值/成本算法。
+                        # 仅测试注入降低分辨率，仍执行真实构建/概率/累计成本算法。
                         super().__init__(scorer, costs, target, **{**params, "bins": 20})
 
                     def analyze(self, echo):

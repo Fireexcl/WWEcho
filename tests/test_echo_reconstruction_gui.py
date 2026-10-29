@@ -37,8 +37,9 @@ class FastActivationPlanner:
                      "success_probability": 1, "attempt_cost": 1, "expected_cost": 1,
                      "expected_embryos": 1, "expected_tuning": 0, "expected_experience": 0},
             "current": {"full_success_lower": 1, "full_success_upper": 1,
-                        "success_probability": 1, "baseline_success_lower": 1,
-                        "recommend_continue": False, "reason": "test", "future_cost": 0},
+                        "success_probability": 1,
+                        "recommend_continue": False, "reason": "test", "future_cost": 0,
+                        "continue_cost": None, "restart_cost": None, "expected_total_cost": 0},
             "score_resolution": .1, "method": "test",
         }
 

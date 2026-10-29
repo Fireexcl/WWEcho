@@ -23,13 +23,13 @@ WWEcho/
 ├── src/
 │   ├── echo_costs.py             ## 轻量成本配置：GUI 与策略共用的默认值和校验
 │   ├── echo_score.py             ## 评分核心、输入校验及 JSON 命令行入口
-│   ├── echo_strategy.py          ## 激活策略分析：概率上下界、阈值决策及成本估算
+│   ├── echo_strategy.py          ## 激活策略：概率上下界与材料权重累计成本最优停止
 │   ├── echo_reconstruction.py    ## 频整器：精确离散锁法分析与固定锁法预算比较
 │   └── echo_gui.py               ## PySide6 图形界面：评分与后台策略分析
 └── tests/
     ├── test_echo_score.py        # 评分、配置校验、非法输入及命令行测试
     ├── test_echo_gui.py          # GUI 交互、实时评分、后台任务及权重导入导出测试
-    ├── test_echo_strategy.py     # 激活策略概率、阈值决策、成本及边界测试
+    ├── test_echo_strategy.py     # 激活概率、累计成本策略、解析验证及边界测试
     ├── test_echo_reconstruction.py # 频整器概率、严格升分、预算及边际测试
     └── test_echo_reconstruction_gui.py # 区域4锁定按钮、表格、缓存及异步测试
 ```

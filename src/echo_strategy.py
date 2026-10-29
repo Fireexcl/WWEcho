@@ -1,4 +1,4 @@
-"""不放回词条模型的分数网格 DP；概率上下界与相对基准策略成本。"""
+"""不放回词条分数网格 DP；按材料权重最小化达标成品的平均累计成本。"""
 
 from __future__ import annotations
 
@@ -28,14 +28,17 @@ def _round_material(amount: Fraction, unit: Fraction, *, up: bool = False) -> Fr
 
 
 class ActivationPlanner:
-    """下取整增分保守决策，上取整增分提供完整激活概率上界。
+    """下取整模型内做累计成本最优停止，上取整提供不开弃置的概率上界。
 
     重复尝试假定胚子主词条已筛选相同、抽样独立且成本固定。
-    推荐以相同主词条、Cost、权重和目标下的 0 词条达标概率下界为基准。
-    强化和开孔不会失败；成本假设未达标且停止投入时主动弃置回收，达标保留。
+    用 Dinkelbach 分式优化求最小 C/p，并在每个状态比较继续与弃置重开的成本。
+    强化和开孔不会失败；未达标且停止投入时主动弃置回收，达标后必须升至 +25 并开满五条。
     采用最少量经验材料逐阶段升级、余量保留；参数未覆盖时读取配置中的成本权重。
     recovery 只控制经验返还，tuning_recovery 独立控制打孔器返还；experience_weight 按每千经验计。
     """
+
+    MAX_OPTIMIZATION_ITERATIONS = 64
+    OPTIMIZATION_TOLERANCE = 1e-10
 
     def __init__(self, scorer: EchoScorer, costs: dict[str, Any], target: float, *,
                  recovery: float | None = None, tuning_recovery: float | None = None,
@@ -86,6 +89,8 @@ class ActivationPlanner:
         self.experience = [float(after - before) for before, after in zip(invested_exp, invested_exp[1:])]
         self.cumulative_tuning = [float(value) for value in cumulative_tuning]
         self.tuning = [float(after - before) for before, after in zip(cumulative_tuning, cumulative_tuning[1:])]
+        self.remaining_tuning = [self.cumulative_tuning[-1] - value for value in self.cumulative_tuning]
+        self.remaining_experience = [self.cumulative_exp[-1] - value for value in self.cumulative_exp]
         # 只在主动弃置回收终点返还一次；十进制有理数避免比例在整数边界误少返材料。
         experience_ratio = Fraction(str(self.recovery))
         tuning_ratio = Fraction(str(self.tuning_recovery))
@@ -108,6 +113,14 @@ class ActivationPlanner:
                                   for value, p in zip(values, probabilities)])
         self._main = None
 
+    def _completion_cost(self, activated_count: int) -> float:
+        """已达标也必须支付余下升级经验和打孔器；历史投入不重复计费。"""
+        return (self.tw * self.remaining_tuning[activated_count]
+                + self.xw * (self.remaining_experience[activated_count] / EXPERIENCE_WEIGHT_UNIT))
+
+    def _material_cost(self, tuning: Any, experience: Any) -> Any:
+        return self.tw * tuning + self.xw * (experience / EXPERIENCE_WEIGHT_UNIT)
+
     def _prepare(self, main: float) -> None:
         if main == self._main:
             return
@@ -117,7 +130,12 @@ class ActivationPlanner:
         self.lower_cache: dict[int, Any] = {}
         self.upper_cache: dict[int, Any] = {}
         self.policy_cache: dict[int, Any] = {}
-        self.baseline_probability = 0.0
+        self.decision_cache: dict[int, Any] = {}
+        self._candidate_cost: float | None = None
+        self._expected_cost: float | None = None
+        self._policy_ready = False
+        self._optimization_iterations = 0
+        self._optimization_converged = False
         self.index = np.arange(self.bins + 1)
         self.success = (self.index == self.bins).astype(float)
         self.quantized = []
@@ -155,38 +173,103 @@ class ActivationPlanner:
         cache[mask] = np.clip(result, 0, 1)
         return cache[mask]
 
+    def _continuation(self, mask: int) -> Any:
+        """开下一条，并按同一套最优后续动作处理；不重新收取已有胚子成本。"""
+        n = bin(mask).count("1")
+        probability = np.zeros(self.bins + 1)
+        tuning = np.full(self.bins + 1, self.tuning[n])
+        experience = np.full(self.bins + 1, self.experience[n])
+        for j, distributions in enumerate(self.quantized):
+            if mask & (1 << j):
+                continue
+            child_p, child_t, child_x = self._policy(mask | (1 << j))
+            for indices, p in distributions[0]:
+                factor = p / (len(self.ids) - n)
+                probability += factor * child_p[indices]
+                tuning += factor * child_t[indices]
+                experience += factor * child_x[indices]
+        return probability, tuning, experience
+
     def _policy(self, mask: int) -> Any:
+        """固定候选累计成本 λ，向后求 min(C-λp)，三项统计来自同一动作。"""
         if mask in self.policy_cache:
             return self.policy_cache[mask]
         n = bin(mask).count("1")
         probability = self.success.copy()
         tuning = np.full(self.bins + 1, -self.recovered_tuning[n])
         experience = np.full(self.bins + 1, -self.recovered_experience[n])
-        tuning[-1] = 0
-        experience[-1] = 0
+        # 达标后不会降分，不必枚举无关的后续档位，但必须计入开满的全部剩余材料。
+        tuning[-1] = self.remaining_tuning[n]
+        experience[-1] = self.remaining_experience[n]
         if n == self.limit:
             return probability, tuning, experience
-        full = self._full(mask)
-        active = (full >= self.baseline_probability) & (full > 0) & (self.index < self.bins)
-        if np.any(active):
-            next_p = np.zeros(self.bins + 1)
-            next_t = np.full(self.bins + 1, self.tuning[n])
-            next_x = np.full(self.bins + 1, self.experience[n])
-            for j, distributions in enumerate(self.quantized):
-                if mask & (1 << j):
-                    continue
-                child_p, child_t, child_x = self._policy(mask | (1 << j))
-                for indices, p in distributions[0]:
-                    factor = p / (len(self.ids) - n)
-                    next_p += factor * child_p[indices]
-                    next_t += factor * child_t[indices]
-                    next_x += factor * child_x[indices]
-            probability[active] = next_p[active]
-            tuning[active] = next_t[active]
-            experience[active] = next_x[active]
+        next_p, next_t, next_x = self._continuation(mask)
+        if self._candidate_cost is None:
+            # 初始可行政策：不提前弃置，全部开满，给出有限 C/p 上界。
+            active = self.index < self.bins
+        else:
+            continue_value = self._material_cost(next_t, next_x) - self._candidate_cost * next_p
+            abandon_value = -self._material_cost(self.recovered_tuning[n], self.recovered_experience[n])
+            # 同成本时选成功机会更高的一项，特别处理全部成本为零。
+            active = ((continue_value < abandon_value)
+                      | ((continue_value == abandon_value) & (next_p > 0)))
+            if mask == 0:
+                # 尚未观察的同类新胚不能靠免费弃置空转；可达时必须先开第一条。
+                active |= next_p > 0
+            active &= self.index < self.bins
+        probability[active] = next_p[active]
+        tuning[active] = next_t[active]
+        experience[active] = next_x[active]
         result = np.clip(probability, 0, 1), tuning, experience
         self.policy_cache[mask] = result
+        self.decision_cache[mask] = active
         return result
+
+    def _root_attempt(self) -> tuple[float, float]:
+        probability, tuning, experience = self._policy(0)
+        chance = float(probability[0])
+        cost = self.ew * self.embryo + float(self._material_cost(tuning[0], experience[0]))
+        if not math.isfinite(cost) or not math.isfinite(chance) or chance <= 0:
+            raise RuntimeError("累计成本优化未得到有限、正成功率的可行策略")
+        if cost < 0:
+            raise RuntimeError("累计成本优化出现无效的负单胚成本")
+        return chance, cost
+
+    def _optimize(self, full_probability: float) -> None:
+        if self._policy_ready:
+            return
+        if full_probability <= 0:
+            # 不将网格下界为零伪装成正概率，也不计算 0/0；实际不可达与精度不足由上界区分。
+            self._candidate_cost = 0.0
+            self._policy_ready = True
+            return
+        chance, cost = self._root_attempt()
+        candidate = cost / chance
+        if not math.isfinite(candidate):
+            raise ValueError("达标累计成本超出有限数值范围")
+        for iteration in range(1, self.MAX_OPTIMIZATION_ITERATIONS + 1):
+            self.policy_cache.clear()
+            self.decision_cache.clear()
+            self._candidate_cost = candidate
+            chance, cost = self._root_attempt()
+            updated = cost / chance
+            if not math.isfinite(updated):
+                raise ValueError("达标累计成本超出有限数值范围")
+            self._optimization_iterations = iteration
+            tolerance = self.OPTIMIZATION_TOLERANCE * max(1.0, abs(candidate), abs(updated))
+            if updated > candidate + tolerance:
+                raise RuntimeError("累计成本优化未单调收敛，请检查成本配置或计算精度")
+            if abs(updated - candidate) <= tolerance:
+                self._expected_cost = updated
+                self._policy_ready = True
+                self._optimization_converged = True
+                return
+            candidate = updated
+        # 不静默把未收敛政策称为最优；GUI 会独立显示错误而不影响评分。
+        self.policy_cache.clear()
+        self.decision_cache.clear()
+        self._candidate_cost = None
+        raise RuntimeError("累计成本策略在迭代上限内未收敛")
 
     def analyze(self, echo: dict[str, Any]) -> dict[str, Any]:
         result = self.scorer.score(echo)
@@ -208,18 +291,30 @@ class ActivationPlanner:
             high_score += math.ceil(gain / self.resolution)
         reached = math.fsum([main] + raw) >= self.target
         lo, hi = min(low_score, self.bins), min(high_score, self.bins)
+        count = len(raw)
+        if reached:
+            completion_reason = (f"分数已达标，必须升至 +25 并开满剩余 {self.limit - count} 条"
+                                 if count < self.limit else "分数已达标且五条已开满，培养完成")
         if self.gap <= 0:
+            # 即使仅主/小词条的满级投影已达标，也要从零投入到 +25、五条全开。
+            attempt = self.ew * self.embryo + self._completion_cost(0)
+            if not math.isfinite(attempt):
+                raise ValueError("达标累计成本超出有限数值范围")
             zero = dict(full_success_lower=1., full_success_upper=1., success_probability=1.,
-                        attempt_cost=self.ew * self.embryo, expected_cost=self.ew * self.embryo,
-                        expected_embryos=1., expected_tuning=0., expected_experience=0.)
+                        attempt_cost=attempt, expected_cost=attempt,
+                        expected_embryos=1., expected_tuning=self.cumulative_tuning[-1],
+                        expected_experience=self.cumulative_exp[-1])
             current = dict(full_success_lower=1., full_success_upper=1., success_probability=1.,
-                           baseline_success_lower=1., recommend_continue=False,
-                           reason="目标已达成，无需继续", future_cost=0.)
+                           recommend_continue=count < self.limit,
+                           reason=completion_reason, future_cost=self._completion_cost(count),
+                           expected_total_cost=self._completion_cost(count),
+                           continue_cost=self._completion_cost(count) if count < self.limit else None,
+                           restart_cost=None)
+            self._optimization_converged = True
         else:
             lower = self._full(0)
             upper = self._full(0, True)
-            baseline = float(lower[0])
-            self.baseline_probability = baseline
+            self._optimize(float(lower[0]))
             p, t, x = self._policy(0)
             chance = float(p[0])
             attempt = (self.ew * self.embryo + self.tw * float(t[0])
@@ -231,27 +326,52 @@ class ActivationPlanner:
                         expected_tuning=float(t[0]) / chance if chance > 0 else None,
                         expected_experience=float(x[0]) / chance if chance > 0 else None)
             full_lo, full_hi = float(self._full(mask)[lo]), float(self._full(mask, True)[hi])
-            cp, ct, cx = self._policy(mask)
-            recommend = (not reached and len(raw) < self.limit
-                         and full_lo > 0 and full_lo >= baseline)
+            restart_cost = (self._expected_cost - self._material_cost(
+                self.recovered_tuning[count], self.recovered_experience[count])
+                if self._expected_cost is not None else None)
+            continue_cost = None
             if reached:
-                reason = "目标已达成，无需继续"
-            elif len(raw) == self.limit:
-                reason = "槽位已满，无法继续"
-            elif full_hi == 0:
-                reason = "剩下的词条全部开完也达不到目标，建议停止"
-            elif full_lo == 0:
-                reason = "目前的计算精度还不能确认有机会达标，建议停止"
-            elif full_lo < baseline:
-                reason = "此胚子开完的保守达标机会比新胚子低，建议停止"
+                full_lo = full_hi = 1.0
+                current_p = 1.0
+                future_cost = self._completion_cost(count)
+                total_cost = future_cost
+                restart_cost = None  # 已达标后不允许弃置。
+                continue_cost = future_cost if count < self.limit else None
+                recommend = count < self.limit
+                reason = completion_reason
+            elif count == self.limit:
+                full_lo = full_hi = current_p = 0.0
+                future_cost = -float(self._material_cost(
+                    self.recovered_tuning[count], self.recovered_experience[count]))
+                total_cost = restart_cost
+                recommend = False
+                reason = "五条已开满但未达标，建议弃置回收后换新胚子"
             else:
-                reason = "此胚子开完的保守达标机会不比新胚子差，建议继续，开一条再判断"
-            current = dict(full_success_lower=1. if reached else full_lo,
-                           full_success_upper=1. if reached else full_hi,
-                           success_probability=1. if reached else float(cp[lo]),
-                           baseline_success_lower=baseline,
+                cp, ct, cx = self._policy(mask)
+                if self._expected_cost is None:
+                    current_p = 0.0
+                    future_cost = -float(self._material_cost(
+                        self.recovered_tuning[count], self.recovered_experience[count]))
+                    total_cost = None
+                    recommend = False
+                    reason = ("新胚子也无法达标，当前没有有限的成功成本" if float(upper[0]) == 0
+                              else "当前计算精度还不能确认新胚子的成功机会，暂不提供成本最优建议")
+                else:
+                    next_p, next_t, next_x = self._continuation(mask)
+                    continue_cost = float(self._material_cost(next_t[lo], next_x[lo]))
+                    continue_cost += (1 - float(next_p[lo])) * self._expected_cost
+                    recommend = bool(self.decision_cache[mask][lo])
+                    current_p = float(cp[lo])
+                    future_cost = float(self._material_cost(ct[lo], cx[lo]))
+                    total_cost = future_cost + (1 - current_p) * self._expected_cost
+                    reason = ("继续开，再按结果决策的平均累计成本不高于弃置重开，建议继续"
+                              if recommend else "弃置回收后换新胚子的平均累计成本较低，建议停止")
+            current = dict(full_success_lower=full_lo, full_success_upper=full_hi,
+                           success_probability=current_p,
                            recommend_continue=recommend, reason=reason,
-                           future_cost=0. if reached else self.tw * float(ct[lo])
-                           + self.xw * (float(cx[lo]) / EXPERIENCE_WEIGHT_UNIT))
+                           future_cost=future_cost, expected_total_cost=total_cost,
+                           continue_cost=continue_cost, restart_cost=restart_cost)
         return dict(zero=zero, current=current, score_resolution=self.resolution,
-                    method="分数网格上下界 DP；逐条概率门槛弃置近似；按主动弃置回收抵扣材料")
+                    method="分数网格上下界 DP；Dinkelbach 累计成本最优停止；达标后必须开满",
+                    optimization_converged=self._optimization_converged,
+                    optimization_iterations=self._optimization_iterations)

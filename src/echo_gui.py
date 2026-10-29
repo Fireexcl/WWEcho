@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from concurrent.futures import CancelledError
 from copy import deepcopy
@@ -321,6 +322,7 @@ class EchoWindow(QMainWindow):
         self._strategy_task = None
         self._strategy_cache: dict[str, Any] = {}
         self._score_result: dict[str, Any] | None = None
+        self._score_reached = False
         self._strategy_cancelled = Event()
         self._strategy_pool = QThreadPool(self)
         self._strategy_pool.setMaxThreadCount(1)
@@ -716,11 +718,11 @@ class EchoWindow(QMainWindow):
             panel_layout = QVBoxLayout(panel)
             metrics = QHBoxLayout()
             definitions = ([
-                ("zero_probability", "有弃置时单次成功率", "从新胚子开始，每开一条都按建议判断是否继续，最终达标的概率；近似计算，可能提前弃置。"),
-                ("zero_cost", "成功达标时累计成本", "反复换胚子直到成功的平均累计成本，包含此前弃置的投入并扣除回收；是平均值，不是保证花费。"),
+                ("zero_probability", "有弃置时单次成功率", "从新胚子开始，按材料权重选择平均累计成本较低的继续或弃置动作；达标后必须开满五条，近似计算最终成功的概率。"),
+                ("zero_cost", "成功达标时累计成本", "反复换胚子直到开满五条并达标的平均累计成本，包含达标后的剩余经验和打孔器、此前弃置投入并扣除回收；不是保证花费。"),
             ] if label is self.zero_strategy else [
                 ("current_probability", "开完剩余词条达标概率", "不中途弃置，开完此胚子剩余词条的达标概率；范围来自计算误差，不是概率本身会浮动。"),
-                ("future_cost", "此胚子后续平均成本", "按建议处理当前胚子直到达标或弃置的平均成本，已扣除回收；不含弃置后换新胚子的费用，也不保证最省材料。"),
+                ("future_cost", "此胚子后续平均成本", "按建议处理当前胚子直到开满五条并达标或弃置的平均成本；提前达标仍计入开满所需经验和打孔器，不含换新胚子的费用。"),
             ])
             self._metric_cards(metrics, definitions, self.strategy_metrics)
             panel_layout.addLayout(metrics)
@@ -732,14 +734,17 @@ class EchoWindow(QMainWindow):
         layout.addLayout(strategy_results)
         self.result_hint = QLabel(
             "同一状态、同一开法的概率本身是固定的；显示范围来自分数取整造成的计算误差，不是概率会浮动。"
-            "推荐规则：把新胚子一次开五条的保守达标概率作为参考阈值；当前开完剩余词条的保守估计大于 0 且不低于阈值时继续，每开一条再判断。"
-            "按建议可能提前弃置，成功率会与一次开满不同；这个建议不保证最省材料。\n"
+            "推荐规则：按当前材料权重，比较继续培养、按后续结果决策的累计成本，与弃置回收后换新胚子做到成功的累计成本，选择较低的一项。"
+            "目标是降低反复尝试到一个达标成品的平均成本，不是最大化单个胚子成功率；成功率和材料消耗可能随权重改变。\n"
+            "分数达标后仍必须升至 +25 并开满五条，不允许提前结束；成功成本包含剩余经验和打孔器。"
             "成本按用户提供数据：5/10/15/20/25 级各开孔一次，每次 10 个打孔器；升级经验按 500 单位累计补足，余量保留。"
             "强化和开孔不会失败；只有主动弃置回收时，经验默认返还 70%，打孔器默认返还 30%；经验向下取整到 500、打孔器按个向下取整。"
-            "成本假设未达标且停止投入时选择回收、达标保留；仅保留不回收时不能扣除返还。\n"
+            "成本假设未达标且停止投入时选择回收；达标后继续开满并保留，不回收；仅保留不回收时不能扣除返还。\n"
             "成本和材料数量都是平均值，并非保证花费；材料已扣除弃置回收，负成本表示返还多于后续投入。"
-            "成功达标时累计成本包含反复换胚子直到成功的全部投入；此胚子后续平均成本只算当前这一件。"
-            "经验按原始点数显示，成本按每 1000 点经验权重折算；调整成本权重不会改变推荐，未计货币与胚子获取成本。"
+            "成功达标时累计成本包含反复换胚子直到开满五条并达标的全部投入；此胚子后续平均成本只算当前这一件。"
+            "两个动作的比较成本及从当前到成品的累计成本包含后续换胚子，不用当前件成本除以当前件成功率。"
+            "经验按原始点数显示，成本按每 1000 点经验权重折算；修改成本权重或回收比例会重新优化推荐，未计货币与主词条刷取成本。"
+            "最省成本仅针对当前分数网格与成本模型，不代表精确游戏最优；当前精度未确认正成功机会时不提供有限累计成本。"
             "分数不是伤害提升百分比。")
         self.result_hint.setObjectName("muted")
         self.result_hint.setWordWrap(True)
@@ -1171,6 +1176,7 @@ class EchoWindow(QMainWindow):
         for label in self.strategy_metrics.values():
             self._set_metric(label)
         self._score_result = None
+        self._score_reached = False
         self.progress.set_target_score(self.target.value())
         self.progress_target_label.setText(f"│ 目标 {self.target.value():g} 分")
         try:
@@ -1179,6 +1185,17 @@ class EchoWindow(QMainWindow):
                 f"理论最高分：{scorer.aligned_max_score:g} 分"
                 f"（未对齐：{scorer.unaligned_max_score:g}）")
             result = scorer.score(self.current_echo())
+            # 与策略使用相同的未圆整贡献判定达标，展示分数四舍五入不能改变成功边界。
+            base = math.fsum([
+                scorer.stat_score("main_stats", result["main_stat"]["stat_id"],
+                                  result["main_stat"]["value"], result["cost"]),
+                scorer.stat_score("minor_stats", result["minor_stat"]["stat_id"],
+                                  result["minor_stat"]["value"], result["cost"]),
+            ])
+            precise_score = math.fsum([base] + [
+                scorer.stat_score("sub_stats", item["stat_id"], item["value"])
+                for item in result["sub_stats"]])
+            self._score_reached = precise_score >= self.target.value()
         except ValueError as exc:
             self.theoretical_max_label.setText("理论最高分：—")
             self.score_label.setText("—")
@@ -1193,7 +1210,12 @@ class EchoWindow(QMainWindow):
         self._score_result = result
         score, target = result["score"], self.target.value()
         self.score_label.setText(f"{score:g} 分")
-        status = f"已达目标 · 超出 {score - target:g} 分" if score >= target else f"未达目标 · 还差 {target - score:g} 分"
+        status = (f"已达目标 · 超出 {max(0, score - target):g} 分" if self._score_reached
+                  else f"未达目标 · 还差 {max(0, target - score):g} 分")
+        if not self._score_reached and score >= target:
+            status = "未达目标 · 显示分数已四舍五入"
+        if self._score_reached and result["activated_count"] < 5:
+            status += f" · 仍需开满剩余 {5 - result['activated_count']} 条"
         self.summary.setText(f"{status}\n主词条 {result['main_score']:g} 分 + 副词条 {result['sub_score']:g} 分"
                              f" + 小词条 {result['minor_score']:g} 分"
                              f" · 已激活 {result['activated_count']}/5")
@@ -1229,8 +1251,10 @@ class EchoWindow(QMainWindow):
     def _update_progress_status(self, current: dict[str, Any] | None = None,
                                 *, unavailable: str = "推荐计算中") -> None:
         result = self._score_result
-        if result is not None and result["score"] >= self.target.value():
-            text, color = "达成目标", "#16a34a"
+        if result is not None and self._score_reached:
+            remaining = 5 - result["activated_count"]
+            text = f"分数达标 · 继续开满剩余 {remaining} 条" if remaining else "达成目标"
+            color = "#16a34a"
         elif result is not None and result["activated_count"] == 5:
             text, color = "下次好运", "#dc2626"
         elif result is not None and current is not None:
@@ -1296,12 +1320,16 @@ class EchoWindow(QMainWindow):
                      f" · 打孔器：{amount(zero['expected_tuning'])}"
                      f" · 经验：{amount(zero['expected_experience'])}")
         recommendation = "建议继续" if current["recommend_continue"] else "建议停止"
+        continue_cost = "—" if current["continue_cost"] is None else amount(current["continue_cost"])
+        restart_cost = "—" if current["restart_cost"] is None else amount(current["restart_cost"])
         current_text = (interval(current, "开完剩余词条达标概率", "此胚子后续成功率")
-                        + f"\n参考阈值：新胚子达标概率 {current['baseline_success_lower']:.2%}（保守估计）"
-                        f"\n{recommendation}（按达标机会判断，不保证最省材料）"
+                + f"\n{recommendation}（按材料权重比较累计成本）"
                         f"\n原因：{current['reason']}"
+                f"\n继续培养到成功的平均成本：{continue_cost}"
+                f"\n弃置重开到成功的平均成本：{restart_cost}"
+                f"\n从当前到成品的平均累计成本：{amount(current['expected_total_cost'])}"
                         f"\n此胚子后续平均成本：{amount(current['future_cost'])}")
-        status = "策略已更新 · 概率和平均成本为近似计算"
+        status = "策略已更新 · 累计成本策略（概率和成本为近似计算）"
         self.zero_strategy.setText(zero_text)
         self.current_strategy.setText(current_text)
         self.strategy_status.setText(status)
