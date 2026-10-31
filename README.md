@@ -4,7 +4,7 @@
 
 ## 独立窗口 GUI
 
-Windows 用户可双击 [WWEcho.exe](dist/WWEcho.exe) 直接运行，无需在目标电脑安装 Python 或项目依赖。该单文件程序包含 GUI 依赖和默认配置；首次打开可能需要几秒解压。要自行构建或更新 EXE，在 Windows 上双击 [build-windows.bat](build-windows.bat)，脚本会安装构建依赖并生成 `dist/WWEcho.exe`；构建机需要 Python 3.9+ 和网络连接。也可在开发环境双击 [run.bat](run.bat) 启动源码版本。macOS/Linux 或 WSL 用户先在项目虚拟环境中安装 GUI 依赖，再执行 `./run.sh`。脚本都会定位项目目录并使用虚拟环境的 Python，不需要手动激活；从其他目录也可通过脚本的绝对路径启动。窗口分为四个区域：
+Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.exe) 直接运行，无需在目标电脑安装 Python 或项目依赖。该单文件程序包含 GUI 依赖和默认配置；首次打开可能需要几秒解压。要自行构建或更新 EXE，在 Windows 上双击 [build-windows.bat](build-windows.bat)，脚本会安装构建依赖并生成 `dist/WWEcho声骸工作台.exe`；构建机需要 Python 3.9+ 和网络连接。也可在开发环境双击 [run.bat](run.bat) 启动源码版本。macOS/Linux 或 WSL 用户先在项目虚拟环境中安装 GUI 依赖，再执行 `./run.sh`。脚本都会定位项目目录并使用虚拟环境的 Python，不需要手动激活；从其他目录也可通过脚本的绝对路径启动。窗口分为四个区域：
 
 1. **上方权重配置**：副词条、Cost 1/3/4 主词条及小词条权重分为五个标签页，同名主词条在不同 Cost 下可独立编辑；小词条页仅有 Cost 4 固定攻击、Cost 3 固定攻击、Cost 1 固定生命三项。支持导入/导出 JSON 预设、恢复默认、0～1000000 的权重和最多四位小数。修改不会自动覆盖内置配置；需要保留时请导出，下次打开后导入。
 2. **中间词条选择**：选择 1/3/4 Cost，主词条候选和 +25 满级值随 Cost 更新；每次切换时 Cost 1/3 默认选攻击百分比，Cost 4 默认选暴击率。固定小词条自动显示 Cost 1 固定生命 2280、Cost 3 固定攻击 100、Cost 4 固定攻击 150，不可手动改写。初始不勾选任何副词条，可选 0～5 个不同副词条并设置档位，切换 Cost 不清空副词条。

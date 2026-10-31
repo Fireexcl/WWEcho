@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul
 cd /d "%~dp0"
 
 set "PYTHON=%CD%\.venv\Scripts\python.exe"
@@ -29,7 +30,7 @@ if errorlevel 1 goto install_failed
 if errorlevel 1 goto build_failed
 
 echo.
-echo Build complete: %CD%\dist\WWEcho.exe
+echo Build complete: %CD%\dist\WWEcho声骸工作台.exe
 pause
 exit /b 0
 
@@ -50,7 +51,7 @@ echo Failed to install build dependencies.
 goto failed
 
 :build_failed
-echo Failed to build WWEcho.exe.
+echo Failed to build WWEcho声骸工作台.exe.
 
 :failed
 pause

@@ -30,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="WWEcho",
+    name="WWEcho声骸工作台",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
