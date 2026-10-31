@@ -740,13 +740,13 @@ class EchoWindow(QMainWindow):
             panel_layout = QVBoxLayout(panel)
             metrics = QGridLayout() if label is self.zero_strategy else QHBoxLayout()
             definitions = ([
-                ("zero_probability", "单个胚子成功率", "从新胚子开始，按材料权重选择继续或弃置；达标后必须开满五条。此概率表示单个胚子最终成功的近似概率。"),
-                ("zero_embryos", "消耗胚子", "反复尝试直到成功所需胚子的平均数量；不是保证数量。"),
-                ("zero_tuning", "消耗打孔器", "反复尝试直到成功所需打孔器的平均数量，已计入弃置回收；不是保证数量。"),
-                ("zero_gold_tubes", "消耗金密音筒", "金密音筒按每个 5000 点经验折算；显示反复尝试直到成功所需的平均数量。"),
+                ("zero_probability", "单个胚子成功率", "从新胚子开始，按本策略开到最后或中途弃置。表示单个胚子本策略下的成功概率。"),
+                ("zero_embryos", "消耗胚子", "反复尝试直到成功所需胚子的平均数量。"),
+                ("zero_tuning", "消耗打孔器", "反复尝试直到成功所需打孔器的平均数量，已计入弃置回收。"),
+                ("zero_gold_tubes", "消耗金密音筒(5000经验)", "反复尝试直到成功所需的平均数量。"),
             ] if label is self.zero_strategy else [
-                ("current_probability", "后续成功率", "按当前策略处理此胚子，最终成功的近似概率。"),
-                ("current_cost", "后续平均成本", "按建议处理当前胚子直到开满五条并达标或弃置的平均成本；提前达标仍计入开满所需经验和打孔器，不含换新胚子的费用。"),
+                ("current_probability", "后续成功率", "按当前策略处理此胚子，最终成功的概率。"),
+                ("current_cost", "后续平均成本", "按策略处理当前胚子直到开满达标或弃置的平均成本。"),
             ])
             self._metric_cards(metrics, definitions, self.strategy_metrics)
             panel_layout.addLayout(metrics)
@@ -757,7 +757,7 @@ class EchoWindow(QMainWindow):
             strategy_results.addWidget(panel, 1)
         layout.addLayout(strategy_results)
         self.result_hint = QLabel(
-            "推荐规则：按当前材料权重，比较继续培养的累计成本，与弃置回收后新胚子做到成功的累计成本，选择较低的一项。"
+            "推荐策略：按当前材料权重，比较继续培养的累计成本，与弃置回收后新胚子做到成功的累计成本，选择较低的一项。"
             "目标是降低反复尝试到一个达标成品的平均成本，成功率和材料消耗可能随权重改变。\n"
             "弃置时经验默认返还 70%，由于向下取整到500实际比例略低，打孔器默认返还 30%。\n"
             # "成本和材料数量都是平均值，并非保证花费；材料已扣除弃置回收，负成本表示返还多于后续投入。"
@@ -803,7 +803,7 @@ class EchoWindow(QMainWindow):
         self.reconstruction_budget.setValue(3)
         self.reconstruction_budget.setSuffix(" 枚")
         self.reconstruction_budget.setToolTip(
-            "动态换锁支持 0～6 枚，默认 3 枚。预算越大首次计算越久；计算在后台运行，可继续编辑。")
+            "支持 0～6 枚，默认 3 枚。预算越大首次计算越久。")
         self.reconstruction_budget.valueChanged.connect(self._reconstruction_budget_changed)
         toolbar.addWidget(self.reconstruction_budget)
         toolbar.addStretch()
@@ -1057,8 +1057,8 @@ class EchoWindow(QMainWindow):
                     item = QTableWidgetItem(text)
                     item.setToolTip(text)
                     if column != 1:
-                        delta_column = 3 if widget is self.reconstruction_plans_table else 4
-                        if column == delta_column and text != "—":
+                        delta_columns = (3, 4) if widget is self.reconstruction_plans_table else (4,)
+                        if column in delta_columns and text != "—":
                             delta = float(text)
                             self._emphasize_item(item, tone="positive" if delta > 0 else
                                                  "negative" if delta < 0 else "", bold=True)

@@ -245,6 +245,14 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.assertEqual(table.item(row, 3).text(), f"{plan['expected_delta']:+.4g}")
             self.assertEqual(table.item(row, 4).text(),
                              "—" if plan["gain_on_success"] is None else f"{plan['gain_on_success']:.4g}")
+            for column, value in ((3, plan["expected_delta"]), (4, plan["gain_on_success"])):
+                cell = table.item(row, column)
+                self.assertEqual(cell.font().bold(), value is not None)
+                if value is None or value == 0:
+                    self.assertEqual(cell.foreground(), table.item(row, 5).foreground())
+                else:
+                    self.assertEqual(cell.foreground().color().name(),
+                                     "#15803d" if value > 0 else "#b91c1c")
             self.assertEqual(table.item(row, 5).text(), str(plan["cost"]))
             self.assertEqual(table.item(row, 6).text(), f"{plan['positive_gain_per_transducer']:.4g}")
         table.cellClicked.emit(8, 1)
@@ -331,6 +339,9 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.assertEqual(table.item(row, 2).text(), f"{plan['cost']} 枚")
             self.assertEqual(table.item(row, 3).text(), f"{value['expected_final_score']:.4g}")
             self.assertEqual(table.item(row, 4).text(), f"{value['expected_delta']:+.4g}")
+            self.assertEqual(table.item(row, 3).foreground().color().name(), "#2456a6")
+            self.assertTrue(table.item(row, 3).font().bold())
+            self.assertTrue(table.item(row, 4).font().bold())
             self.assertEqual(table.item(row, 5).text(), f"{value['expected_cost']:.4g}")
             self.assertEqual(table.item(row, 6).text(), f"{value['expected_attempts']:.4g}")
         self.assertEqual([table.item(row, 0).text() for row in range(table.rowCount())],
@@ -564,6 +575,8 @@ class ReconstructionGuiTests(unittest.TestCase):
         for row in range(table.rowCount()):
             self.assertEqual(table.item(row, 2).text(), "0.0000%")
             self.assertEqual(table.item(row, 4).text(), "—")
+            self.assertEqual(table.item(row, 4).foreground(), table.item(row, 3).foreground())
+            self.assertFalse(table.item(row, 4).font().bold())
             self.assertEqual(table.item(row, 7).text(), "无法获得 / ∞")
         comparison = self.window._reconstruction_result["dynamic"]
         self.assertTrue(all(row["budget"]["expected_cost"] == 3 for row in comparison["rows"][1:]))
