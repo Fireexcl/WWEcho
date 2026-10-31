@@ -816,20 +816,17 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self.reconstruction_divider)
         self.reconstruction_status = QLabel("请先在区域 2 开满五条副词条")
         self.reconstruction_status.setObjectName("status")
-        self.reconstruction_selected = QLabel("勾选 1～4 个词条，查看当前锁法。")
-        self.reconstruction_selected.setObjectName("notice")
-        self.reconstruction_recommendation = QLabel("—")
-        self.reconstruction_recommendation.setObjectName("notice")
-        for label in (self.reconstruction_status, self.reconstruction_selected,
-                      self.reconstruction_recommendation):
-            label.setWordWrap(True)
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            layout.addWidget(label)
+        self.reconstruction_status.setWordWrap(True)
+        self.reconstruction_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.reconstruction_status)
         metrics = QHBoxLayout()
         self._metric_cards(metrics, [
             ("probability", "当前锁法 · 单次升分概率", "严格超过当前原始评分的概率，与目标分数无关。"),
             ("gain_on_success", "当前锁法 · 成功时平均 Δ 分",
              "仅在单次重构严格超过当前原始评分时的平均提分，按结果概率加权；无正提升机会时显示“—”。"),
+            ("expected_cost_to_improve", "当前锁法 · 升分期望消耗",
+             "固定当前锁法反复尝试，首次严格超过原始评分即停的平均频整器消耗；"
+             "等于单次消耗 / 单次升分概率，不受当前预算限制；无升分机会时不可获得。"),
             ("delta", "当前锁法 · 单次期望 Δ 分", "包含降分风险的期望分数变化，不是保证升分。"),
             ("cost", "当前锁法 · 单次消耗", "锁1/2/3/4条分别消耗1/1/2/3枚频整器。"),
         ], self.reconstruction_metrics)
@@ -876,8 +873,8 @@ class EchoWindow(QMainWindow):
             "单次："
             # "期望Δ分含降分风险；正收益 = E[max(Δ分, 0)]；"
             "成功时平均Δ分为正提升条件均值；升分期望消耗 = 单次消耗 / 单次升分概率。\n"
-            "同预算："
-            "动态方案根据实际保留状态选择最优后续锁法。"
+            "同预算：给定频整器预算时，选择不同锁法时的收益。"
+            "其中动态方案根据实际保留状态选择最优后续锁法。"
             # "每次洗出候选可保留或拒绝；拒绝后沿用原词条，但本次频整器照扣。"
             # "每次在实际保留的状态上重新选锁，计算后续收益。"
             # "三枚方案完整执行 1+1+1、1+2、2+1 或 3；不是首次超过原始评分即停。"
@@ -940,13 +937,10 @@ class EchoWindow(QMainWindow):
         self._reconstruction_key = None
         self.reconstruction_status.setText(message)
         self.reconstruction_status.setVisible(True)
-        self.reconstruction_recommendation.setText("—")
         if budget_only and self._reconstruction_result is not None:
             self._reconstruction_result = {**self._reconstruction_result, "dynamic": None}
-            self._display_reconstruction_selection(refresh_single=False)
         else:
             self._reconstruction_result = None
-            self.reconstruction_selected.setText("勾选 1～4 个词条，查看当前锁法。")
             for label in self.reconstruction_metrics.values():
                 self._set_metric(label)
             self.reconstruction_plans_table.setRowCount(0)
@@ -1007,7 +1001,6 @@ class EchoWindow(QMainWindow):
                     self._reconstruction_key = None
                     self._reconstruction_budget_rows = []
                     self.reconstruction_budget_table.setRowCount(0)
-                    self.reconstruction_recommendation.setText("—")
                     self.reconstruction_status.setText(f"频整器结果格式有误：{exc}")
                     self.reconstruction_status.setVisible(True)
         if self._reconstruction_pending is not None and not self._reconstruction_timer.isActive():
@@ -1078,62 +1071,40 @@ class EchoWindow(QMainWindow):
             self._reconstruction_rows = plans
         self._reconstruction_budget_rows = comparison["rows"]
         self._reconstruction_result = result
-        self.reconstruction_status.clear()
-        self.reconstruction_status.setVisible(False)
-        recommendation = comparison["recommendation"]
         if comparison.get("error"):
-            text = f"同预算动态结果暂不可用：{comparison['error']}"
-        elif recommendation is None:
-            text = "预算为 0：不执行洗练，仅显示当前评分基线；不与执行方案混算。"
+            self.reconstruction_status.setText(f"同预算动态结果暂不可用：{comparison['error']}")
+            self.reconstruction_status.setVisible(True)
         else:
-            value = recommendation["budget"]
-            text = (f"同预算动态方案：实际使用 {comparison['budget']} 枚，首步锁 {recommendation['locked_count']} 条、"
-                    f"消耗 {recommendation['cost']} 枚。每次可保留或拒绝候选，拒绝也扣材料；之后按实际保留状态换锁。\n"
-                    f"最终期望分数 {amount(value['expected_final_score'])}，"
-                    f"最终期望Δ分 {amount(value['expected_delta'], signed=True)}；"
-                    f"期望实际消耗 {amount(value['expected_cost'])} 枚，"
-                    f"期望重构 {amount(value['expected_attempts'])} 次。\n"
-                    f"首步锁法：{self._locked_description(recommendation)}")
-        self.reconstruction_recommendation.setText(text)
-        self._display_reconstruction_selection(refresh_single=refresh_single)
-
-    def _display_reconstruction_selection(self, *, refresh_single: bool = True) -> None:
+            self.reconstruction_status.clear()
+            self.reconstruction_status.setVisible(False)
         if refresh_single:
-            self.reconstruction_plans_table.clearSelection()
-            for label in self.reconstruction_metrics.values():
-                self._set_metric(label)
-        if not self.reconstruction_locks:
-            self.reconstruction_selected.setText("尚未锁定：请勾选 1～4 个词条。")
-            return
-        if self._reconstruction_result is None:
-            self.reconstruction_selected.setText("当前锁法等待有效的五词条计算结果。")
+            self._display_reconstruction_selection()
+
+    def _display_reconstruction_selection(self) -> None:
+        self.reconstruction_plans_table.clearSelection()
+        for label in self.reconstruction_metrics.values():
+            self._set_metric(label)
+        if not self.reconstruction_locks or self._reconstruction_result is None:
             return
         plan = next(plan for plan in self._reconstruction_result["plans"]
                     if set(plan["locked_ids"]) == self.reconstruction_locks)
         amount = self._reconstruction_amount
-        if refresh_single:
-            self._set_metric(self.reconstruction_metrics["probability"], f"{plan['probability']:.4%}", "accent")
-            gain = plan["gain_on_success"]
-            self._set_metric(self.reconstruction_metrics["gain_on_success"], amount(gain),
-                     "positive" if gain is not None else "muted")
-            delta = plan["expected_delta"]
-            self._set_metric(self.reconstruction_metrics["delta"], amount(delta, signed=True),
-                     "positive" if delta > 0 else "negative" if delta < 0 else "muted")
-            self._set_metric(self.reconstruction_metrics["cost"], f"{plan['cost']} 枚", "accent")
-        success_cost = (amount(plan["expected_cost_to_improve"])
-                if plan["expected_cost_to_improve"] is not None else "无法获得 / ∞")
-        self.reconstruction_selected.setText(
-            f"当前锁 {plan['locked_count']} 条 / 洗 {plan['rerolled_count']} 条：{self._locked_description(plan)}\n"
-            f"单次正提升概率 {plan['probability']:.4%} · 消耗 {plan['cost']} 枚 · "
-            f"期望Δ分 {amount(plan['expected_delta'], signed=True)} · "
-            f"成功时平均Δ分 {amount(plan['gain_on_success'])}\n"
-            f"正收益/枚 {amount(plan['positive_gain_per_transducer'])} · "
-            f"升分期望消耗 {success_cost} 枚")
-        if refresh_single:
-            for row, item in enumerate(self._reconstruction_rows):
-                if set(item["locked_ids"]) == self.reconstruction_locks:
-                    self.reconstruction_plans_table.selectRow(row)
-                    break
+        expected_cost = plan["expected_cost_to_improve"]
+        success_cost = amount(expected_cost) if expected_cost is not None else "无法获得 / ∞"
+        self._set_metric(self.reconstruction_metrics["probability"], f"{plan['probability']:.4%}", "accent")
+        gain = plan["gain_on_success"]
+        self._set_metric(self.reconstruction_metrics["gain_on_success"], amount(gain),
+                 "positive" if gain is not None else "muted")
+        self._set_metric(self.reconstruction_metrics["expected_cost_to_improve"], f"{success_cost} 枚",
+                 "accent" if expected_cost is not None else "muted")
+        delta = plan["expected_delta"]
+        self._set_metric(self.reconstruction_metrics["delta"], amount(delta, signed=True),
+                 "positive" if delta > 0 else "negative" if delta < 0 else "muted")
+        self._set_metric(self.reconstruction_metrics["cost"], f"{plan['cost']} 枚", "accent")
+        for row, item in enumerate(self._reconstruction_rows):
+            if set(item["locked_ids"]) == self.reconstruction_locks:
+                self.reconstruction_plans_table.selectRow(row)
+                break
 
     def _reconstruction_budget_changed(self) -> None:
         if not self.updating:
