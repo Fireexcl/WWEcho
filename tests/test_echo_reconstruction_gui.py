@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtCore import QThread
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 from src import echo_reconstruction, echo_strategy
@@ -131,7 +132,10 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.window.calculate()
 
     def wait_for_result(self):
-        self.wait_until(lambda: self.window._reconstruction_result is not None)
+        self.wait_until(lambda: self.window._reconstruction_result is not None
+                        and self.window._reconstruction_result["dynamic"] is not None
+                        and self.window._reconstruction_result["dynamic"]["budget"]
+                        == self.window.reconstruction_budget.value())
 
     def test_five_buttons_require_full_echo_and_limit_locks_to_four(self):
         buttons = self.window.reconstruction_lock_buttons
@@ -212,7 +216,8 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.wait_for_result()
         result = self.window._reconstruction_result
         self.window.reconstruction_budget.setValue(2)
-        self.assertIsNone(self.window._reconstruction_result)
+        self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
+        self.assertIsNone(self.window._reconstruction_result["dynamic"])
         self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
         self.wait_for_result()
         comparison = self.window._reconstruction_result["dynamic"]
@@ -239,6 +244,113 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
         self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
         self.assertEqual([call[1] for call in ControlledReconstructionPlanner.budget_calls], [3, 2, 0])
+
+    def test_budget_updates_only_budget_tab_and_keeps_single_selection(self):
+        self.fill_five()
+        self.wait_for_result()
+        self.window.show()
+        self.app.processEvents()
+        table = self.window.reconstruction_plans_table
+        table.cellClicked.emit(8, 1)
+        table.setCurrentCell(8, 1)
+        scrollbar = table.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum() // 2)
+        self.assertGreater(scrollbar.value(), 0)
+        cells = [[table.item(row, column) for column in range(table.columnCount())]
+                 for row in range(table.rowCount())]
+        rows = self.window._reconstruction_rows
+        single = self.window._reconstruction_result["plans"]
+        locks = self.window.reconstruction_locks.copy()
+        metrics = {name: label.text() for name, label in self.window.reconstruction_metrics.items()}
+        current = (table.currentRow(), table.currentColumn())
+        scroll = scrollbar.value()
+        data_changes = QSignalSpy(table.model().dataChanged)
+        selection_changes = QSignalSpy(table.selectionModel().selectionChanged)
+        ControlledReconstructionPlanner.budget_gate.clear()
+        self.window.reconstruction_budget.setValue(2)
+        self.assertEqual(table.rowCount(), 30)
+        self.assertIs(self.window._reconstruction_rows, rows)
+        self.assertIs(self.window._reconstruction_result["plans"], single)
+        self.assertIsNone(self.window._reconstruction_result["dynamic"])
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+        self.wait_until(lambda: len(ControlledReconstructionPlanner.budget_calls) == 2)
+        for phase in ("calculating", "finished"):
+            with self.subTest(phase=phase):
+                self.assertIs(self.window._reconstruction_rows, rows)
+                for row, items in enumerate(cells):
+                    for column, item in enumerate(items):
+                        self.assertIs(table.item(row, column), item)
+                self.assertEqual(self.window.reconstruction_locks, locks)
+                self.assertEqual({name: label.text() for name, label
+                                  in self.window.reconstruction_metrics.items()}, metrics)
+                self.assertEqual((table.currentRow(), table.currentColumn()), current)
+                self.assertEqual([index.row() for index in table.selectionModel().selectedRows()], [8])
+                self.assertEqual(scrollbar.value(), scroll)
+                self.assertEqual(self.window.reconstruction_tabs.currentIndex(), 0)
+                self.assertEqual(data_changes.count(), 0)
+                self.assertEqual(selection_changes.count(), 0)
+            if phase == "calculating":
+                ControlledReconstructionPlanner.budget_gate.set()
+                self.wait_for_result()
+        self.assertEqual(self.window._reconstruction_result["dynamic"]["budget"], 2)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 4)
+        self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
+
+    def test_budget_errors_keep_single_plans_usable_and_can_retry(self):
+        self.fill_five()
+        self.wait_for_result()
+        table = self.window.reconstruction_plans_table
+        single = self.window._reconstruction_result["plans"]
+        cell = table.item(8, 2)
+        failures = [
+            (2, ValueError("controlled budget failure"), "controlled budget failure"),
+            (1, {"budget": 1}, "频整器结果格式有误"),
+        ]
+        for budget, response, message in failures:
+            with self.subTest(budget=budget):
+                with patch.object(ControlledReconstructionPlanner, "compare_dynamic_budget") as compare:
+                    if isinstance(response, Exception):
+                        compare.side_effect = response
+                    else:
+                        compare.return_value = response
+                    self.window.reconstruction_budget.setValue(budget)
+                    self.wait_until(lambda: message in self.window.reconstruction_status.text())
+                self.assertIs(self.window._reconstruction_result["plans"], single)
+                self.assertIsNone(self.window._reconstruction_result["dynamic"])
+                self.assertEqual(table.rowCount(), 30)
+                self.assertIs(table.item(8, 2), cell)
+                self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+                table.cellClicked.emit(8, 1)
+                self.assertEqual(self.window.reconstruction_locks,
+                                 set(self.window._reconstruction_rows[8]["locked_ids"]))
+                self.assertIn("单次正提升概率", self.window.reconstruction_selected.text())
+                self.assertIn("同预算动态结果尚未就绪", self.window.reconstruction_selected.text())
+                self.assertTrue(all(label.text() != "—"
+                                    for label in self.window.reconstruction_metrics.values()))
+        self.window._reconstruction_budget_changed()
+        self.wait_for_result()
+        self.assertEqual(self.window._reconstruction_result["dynamic"]["budget"], 1)
+        self.assertIs(table.item(8, 2), cell)
+        self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
+
+    def test_input_change_during_budget_update_invalidates_single_analysis(self):
+        self.fill_five()
+        self.wait_for_result()
+        single = self.window._reconstruction_result["plans"]
+        ControlledReconstructionPlanner.budget_gate.clear()
+        self.window.reconstruction_budget.setValue(2)
+        self.wait_until(lambda: len(ControlledReconstructionPlanner.budget_calls) == 2)
+        self.window.sub_tier_inputs["crit_rate"].setCurrentIndex(0)
+        self.assertIsNone(self.window._reconstruction_result)
+        self.assertEqual(self.window.reconstruction_plans_table.rowCount(), 0)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+        self.assertTrue(all(label.text() == "—" for label in self.window.reconstruction_metrics.values()))
+        ControlledReconstructionPlanner.budget_gate.set()
+        self.wait_for_result()
+        self.assertIsNot(self.window._reconstruction_result["plans"], single)
+        self.assertEqual(self.window._reconstruction_result["dynamic"]["budget"], 2)
+        self.assertEqual(len(ControlledReconstructionPlanner.calls), 2)
+        self.assertEqual(ControlledReconstructionPlanner.calls[-1][1], self.window.current_echo())
 
     def test_three_budget_paths_and_scope_are_explicit(self):
         self.fill_five()
@@ -368,6 +480,12 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.window.reconstruction_lock_buttons[0].click()
             self.assertIn("单次正提升概率", self.window.reconstruction_selected.text())
             self.assertIn("动态结果暂不可用", self.window.reconstruction_selected.text())
+            cell = self.window.reconstruction_plans_table.item(0, 2)
+            self.window.reconstruction_budget.setValue(2)
+            self.wait_for_result()
+            self.assertIs(self.window.reconstruction_plans_table.item(0, 2), cell)
+            self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
+            self.assertIn("controlled dynamic resource limit", self.window.reconstruction_recommendation.text())
 
     def test_separate_worker_runs_while_activation_is_blocked(self):
         FastActivationPlanner.gate.clear()

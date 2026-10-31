@@ -921,23 +921,28 @@ class EchoWindow(QMainWindow):
         self._sync_reconstruction_buttons()
         self._display_reconstruction_selection()
 
-    def _invalidate_reconstruction(self, message: str) -> None:
+    def _invalidate_reconstruction(self, message: str, *, budget_only: bool = False) -> None:
         self._reconstruction_version += 1
         self._reconstruction_cancelled.set()
         self._reconstruction_timer.stop()
         self._reconstruction_pending = None
         self._reconstruction_key = None
-        self._reconstruction_result = None
         self.reconstruction_status.setText(message)
-        self.reconstruction_selected.setText("勾选 1～4 个词条，查看当前锁法。")
         self.reconstruction_recommendation.setText("—")
-        for label in self.reconstruction_metrics.values():
-            self._set_metric(label)
-        self.reconstruction_plans_table.setRowCount(0)
+        if budget_only and self._reconstruction_result is not None:
+            self._reconstruction_result = {**self._reconstruction_result, "dynamic": None}
+            self._display_reconstruction_selection(refresh_single=False)
+        else:
+            self._reconstruction_result = None
+            self.reconstruction_selected.setText("勾选 1～4 个词条，查看当前锁法。")
+            for label in self.reconstruction_metrics.values():
+                self._set_metric(label)
+            self.reconstruction_plans_table.setRowCount(0)
+        self._reconstruction_budget_rows = []
         self.reconstruction_budget_table.setRowCount(0)
         self._sync_reconstruction_buttons()
 
-    def _queue_reconstruction(self) -> None:
+    def _queue_reconstruction(self, *, budget_only: bool = False) -> None:
         self._sync_reconstruction_buttons()
         if len(self.selected_sub_stats) != 5:
             self._invalidate_reconstruction("请先在区域 2 开满五条副词条")
@@ -950,7 +955,8 @@ class EchoWindow(QMainWindow):
         key = json.dumps(data, sort_keys=True, ensure_ascii=False)
         if key == self._reconstruction_key:
             return
-        self._invalidate_reconstruction("频整器动态换锁等待后台计算（评分仍可编辑）")
+        self._invalidate_reconstruction("频整器动态换锁等待后台计算（评分仍可编辑）",
+                                        budget_only=budget_only)
         self._reconstruction_key = key
         self._reconstruction_pending = (self._reconstruction_version, deepcopy(data))
         self._reconstruction_timer.start()
@@ -979,10 +985,15 @@ class EchoWindow(QMainWindow):
                 self._reconstruction_key = None
                 self.reconstruction_status.setText(f"频整器计算失败（不影响评分）：{error}")
             elif result is not None:
+                previous_result = self._reconstruction_result
                 try:
                     self._display_reconstruction(result)
                 except (KeyError, TypeError, ValueError) as exc:
-                    self._reconstruction_result = None
+                    self._reconstruction_result = previous_result
+                    self._reconstruction_key = None
+                    self._reconstruction_budget_rows = []
+                    self.reconstruction_budget_table.setRowCount(0)
+                    self.reconstruction_recommendation.setText("—")
                     self.reconstruction_status.setText(f"频整器结果格式有误：{exc}")
         if self._reconstruction_pending is not None and not self._reconstruction_timer.isActive():
             self._start_reconstruction()
@@ -1004,16 +1015,20 @@ class EchoWindow(QMainWindow):
         if comparison["budget"] != self.reconstruction_budget.value():
             return
         # 先完成所有计算，再提交，防止错误响应留下旧输入的部分表格。
-        plans = sorted(result["plans"], key=lambda plan: (plan["locked_count"], -plan["expected_delta"]))
+        refresh_single = (self._reconstruction_result is None
+                          or self._reconstruction_result["plans"] is not result["plans"])
+        plans = (sorted(result["plans"], key=lambda plan: (plan["locked_count"], -plan["expected_delta"]))
+                 if refresh_single else self._reconstruction_rows)
         rows = []
         amount = self._reconstruction_amount
-        for plan in plans:
-            rows.append([
-                str(plan["locked_count"]), self._locked_description(plan, "\n"), f"{plan['probability']:.4%}",
-                amount(plan["expected_delta"], signed=True), amount(plan["gain_on_success"]), str(plan["cost"]),
-                amount(plan["positive_gain_per_transducer"]),
-                amount(plan["expected_cost_to_improve"]) if plan["expected_cost_to_improve"] is not None
-                else "无法获得 / ∞"])
+        if refresh_single:
+            for plan in plans:
+                rows.append([
+                    str(plan["locked_count"]), self._locked_description(plan, "\n"), f"{plan['probability']:.4%}",
+                    amount(plan["expected_delta"], signed=True), amount(plan["gain_on_success"]), str(plan["cost"]),
+                    amount(plan["positive_gain_per_transducer"]),
+                    amount(plan["expected_cost_to_improve"]) if plan["expected_cost_to_improve"] is not None
+                    else "无法获得 / ∞"])
         budget_rows = []
         for plan in comparison["rows"]:
             value = plan["budget"]
@@ -1024,8 +1039,10 @@ class EchoWindow(QMainWindow):
                 f"{plan['cost']} 枚", amount(value["expected_final_score"]),
                 amount(value["expected_delta"], signed=True), amount(value["expected_cost"]),
                 amount(value["expected_attempts"]), amount(value["net_gain_per_transducer"], signed=True)])
-        for widget, values in ((self.reconstruction_plans_table, rows),
-                               (self.reconstruction_budget_table, budget_rows)):
+        tables = [(self.reconstruction_budget_table, budget_rows)]
+        if refresh_single:
+            tables.insert(0, (self.reconstruction_plans_table, rows))
+        for widget, values in tables:
             widget.setRowCount(len(values))
             for row, texts in enumerate(values):
                 for column, text in enumerate(texts):
@@ -1042,7 +1059,8 @@ class EchoWindow(QMainWindow):
                                                  bold=column == (2 if widget is self.reconstruction_plans_table else 3))
                     widget.setItem(row, column, item)
             widget.resizeRowsToContents()
-        self._reconstruction_rows = plans
+        if refresh_single:
+            self._reconstruction_rows = plans
         self._reconstruction_budget_rows = comparison["rows"]
         self._reconstruction_result = result
         self.reconstruction_status.setText(
@@ -1062,12 +1080,13 @@ class EchoWindow(QMainWindow):
                     f"期望重构 {amount(value['expected_attempts'])} 次。\n"
                     f"首步锁法：{self._locked_description(recommendation)}")
         self.reconstruction_recommendation.setText(text)
-        self._display_reconstruction_selection()
+        self._display_reconstruction_selection(refresh_single=refresh_single)
 
-    def _display_reconstruction_selection(self) -> None:
-        self.reconstruction_plans_table.clearSelection()
-        for label in self.reconstruction_metrics.values():
-            self._set_metric(label)
+    def _display_reconstruction_selection(self, *, refresh_single: bool = True) -> None:
+        if refresh_single:
+            self.reconstruction_plans_table.clearSelection()
+            for label in self.reconstruction_metrics.values():
+                self._set_metric(label)
         if not self.reconstruction_locks:
             self.reconstruction_selected.setText("尚未锁定：请勾选 1～4 个词条；全部锁法与同预算比较见下表。")
             return
@@ -1076,23 +1095,28 @@ class EchoWindow(QMainWindow):
             return
         plan = next(plan for plan in self._reconstruction_result["plans"]
                     if set(plan["locked_ids"]) == self.reconstruction_locks)
-        dynamic = next(item for item in self._reconstruction_result["dynamic"]["first_plans"]
-                   if set(item["locked_ids"]) == self.reconstruction_locks)
-        value = dynamic["dynamic_budget"]
         amount = self._reconstruction_amount
-        self._set_metric(self.reconstruction_metrics["probability"], f"{plan['probability']:.4%}", "accent")
-        delta = plan["expected_delta"]
-        self._set_metric(self.reconstruction_metrics["delta"], amount(delta, signed=True),
-                 "positive" if delta > 0 else "negative" if delta < 0 else "muted")
-        self._set_metric(self.reconstruction_metrics["cost"], f"{plan['cost']} 枚", "accent")
+        if refresh_single:
+            self._set_metric(self.reconstruction_metrics["probability"], f"{plan['probability']:.4%}", "accent")
+            delta = plan["expected_delta"]
+            self._set_metric(self.reconstruction_metrics["delta"], amount(delta, signed=True),
+                     "positive" if delta > 0 else "negative" if delta < 0 else "muted")
+            self._set_metric(self.reconstruction_metrics["cost"], f"{plan['cost']} 枚", "accent")
         success_cost = (amount(plan["expected_cost_to_improve"])
                 if plan["expected_cost_to_improve"] is not None else "无法获得 / ∞")
-        budget_text = (f"以当前锁法作为首步，之后动态换锁：最终期望分数 {amount(value['expected_final_score'])} · "
-                   f"最终期望Δ分 {amount(value['expected_delta'], signed=True)} · "
-                   f"期望实际消耗 {amount(value['expected_cost'])} 枚 · "
-                   f"期望重构 {amount(value['expected_attempts'])} 次"
-                   if value is not None else "同预算动态结果暂不可用" if self._reconstruction_result["dynamic"].get("error")
-                   else f"当前预算不足以执行此首步（需要 {plan['cost']} 枚）")
+        comparison = self._reconstruction_result["dynamic"]
+        if comparison is None:
+            budget_text = "同预算动态结果尚未就绪"
+        else:
+            dynamic = next(item for item in comparison["first_plans"]
+                           if set(item["locked_ids"]) == self.reconstruction_locks)
+            value = dynamic["dynamic_budget"]
+            budget_text = (f"以当前锁法作为首步，之后动态换锁：最终期望分数 {amount(value['expected_final_score'])} · "
+                       f"最终期望Δ分 {amount(value['expected_delta'], signed=True)} · "
+                       f"期望实际消耗 {amount(value['expected_cost'])} 枚 · "
+                       f"期望重构 {amount(value['expected_attempts'])} 次"
+                       if value is not None else "同预算动态结果暂不可用" if comparison.get("error")
+                       else f"当前预算不足以执行此首步（需要 {plan['cost']} 枚）")
         self.reconstruction_selected.setText(
             f"当前锁 {plan['locked_count']} 条 / 洗 {plan['rerolled_count']} 条：{self._locked_description(plan)}\n"
             f"单次正提升概率 {plan['probability']:.4%} · 消耗 {plan['cost']} 枚 · "
@@ -1101,14 +1125,15 @@ class EchoWindow(QMainWindow):
             f"正收益/枚 {amount(plan['positive_gain_per_transducer'])} · "
             f"升分期望消耗 {success_cost} 枚\n"
             f"{budget_text}")
-        for row, item in enumerate(self._reconstruction_rows):
-            if set(item["locked_ids"]) == self.reconstruction_locks:
-                self.reconstruction_plans_table.selectRow(row)
-                break
+        if refresh_single:
+            for row, item in enumerate(self._reconstruction_rows):
+                if set(item["locked_ids"]) == self.reconstruction_locks:
+                    self.reconstruction_plans_table.selectRow(row)
+                    break
 
     def _reconstruction_budget_changed(self) -> None:
         if not self.updating:
-            self._queue_reconstruction()
+            self._queue_reconstruction(budget_only=True)
 
     def _apply_reconstruction_plan(self, row: int, _column: int) -> None:
         if self._reconstruction_result is None:
@@ -1118,7 +1143,7 @@ class EchoWindow(QMainWindow):
         self._display_reconstruction_selection()
 
     def _apply_reconstruction_budget_plan(self, row: int, _column: int) -> None:
-        if self._reconstruction_result is None:
+        if self._reconstruction_result is None or self._reconstruction_result["dynamic"] is None:
             return
         plan = self._reconstruction_budget_rows[row]
         self.reconstruction_locks = set(plan["locked_ids"])
