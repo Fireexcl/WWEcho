@@ -231,6 +231,18 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.wait_for_result()
         self.assertEqual(layout.count(), 8)
         self.assertEqual(panel.findChildren(QLabel, "notice"), [])
+        for budget in (3, 1):
+            self.window.reconstruction_budget.setValue(budget)
+            self.wait_for_result()
+            for name, table in (("single", self.window.reconstruction_plans_table),
+                                ("budget", self.window.reconstruction_budget_table)):
+                with self.subTest(budget=budget, table=name):
+                    self.assertGreater(table.rowCount(), 0)
+                    for column in range(table.columnCount()):
+                        self.assertEqual(table.horizontalHeaderItem(column).toolTip(), "")
+                    for row in range(table.rowCount()):
+                        for column in range(table.columnCount()):
+                            self.assertEqual(table.item(row, column).toolTip(), "")
 
     def test_all_thirty_rows_and_selected_probability_match_real_api(self):
         self.fill_five()
@@ -275,6 +287,8 @@ class ReconstructionGuiTests(unittest.TestCase):
                                        "delta", "cost")):
             self.assertIs(cards.itemAt(column).widget(), metrics[name].parentWidget())
             self.assertEqual(cards.stretch(column), 1)
+            with self.subTest(metric=name):
+                self.assertEqual(metrics[name].parentWidget().toolTip(), "")
         caption = metrics["gain_on_success"].parentWidget().layout().itemAt(0).widget()
         self.assertEqual(caption.text(), "当前锁法 · 成功时平均 Δ 分")
         caption = metrics["expected_cost_to_improve"].parentWidget().layout().itemAt(0).widget()
@@ -482,8 +496,6 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertIn("动态换锁", self.window.reconstruction_tabs.tabText(1))
         self.assertIn("每次洗出候选可保留或拒绝", self.window.reconstruction_hint.text())
         self.assertIn("不是首次超过原始评分即停", self.window.reconstruction_hint.text())
-        self.assertIn("不混入未执行洗练", table.horizontalHeaderItem(4).toolTip())
-        self.assertIn("拒绝后仍用原词条且照扣材料", table.horizontalHeaderItem(1).toolTip())
         for row, attempts in ((2, "3"), (3, "2"), (4, "2"), (5, "1")):
             self.assertEqual(table.item(row, 5).text(), "3")
             self.assertEqual(table.item(row, 6).text(), attempts)

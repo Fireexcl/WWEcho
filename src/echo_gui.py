@@ -523,8 +523,6 @@ class EchoWindow(QMainWindow):
                 table.setCellWidget(row, column + 1, box)
                 table.setRowHeight(row, 44)
                 self.weight_inputs[category][stat_id] = box
-                if category == "minor_stats":
-                    box.setToolTip("按当前 Cost 的固定满级数值计分，不占副词条槽位。")
             tabs.addTab(table, title)
         layout.addWidget(tabs)
         return group
@@ -688,11 +686,6 @@ class EchoWindow(QMainWindow):
         self.cost_divider = self._divider()
         layout.addWidget(self.cost_divider)
         self.cost_parameters_label = QLabel("成本估算相关参数")
-        self.cost_parameters_label.setToolTip(
-            "用户提供成本：每次开孔 10 个打孔器；经验按 500 为最小单位投入，余量保留。\n"
-            "强化和开孔不会失败；只有主动弃置回收才返还，经验默认 70%、打孔器默认 30%。\n"
-            "经验向下取整到 500，打孔器按个向下取整；不含货币及胚子获取成本。\n"
-            + self.cost_defaults_note)
         layout.addWidget(self.cost_parameters_label)
         parameters = QGridLayout()
         self.cost_parameters_layout = parameters
@@ -714,16 +707,6 @@ class EchoWindow(QMainWindow):
             parameters.addWidget(caption, 0, index)
             parameters.addWidget(box, 1, index)
             parameters.setColumnStretch(index, 1)
-        self.strategy_inputs["recovery"].setToolTip(
-            "弃置回收时返还经验，实际有损耗略小于70%。\n"
-            "成本模型假设未达标且停止投入时选择回收。\n"
-            "按累计实际投入经验计算后向下取整到 500，不影响打孔器回收比例。")
-        self.strategy_inputs["tuning_recovery"].setToolTip(
-            "打孔器回收，默认 30%：每开孔消耗 10 个，主动回收返还 3 个。\n"
-            "按累计已用打孔器计算后向下取整到整数个，不影响经验回收比例。")
-        self.strategy_inputs["experience_weight"].setToolTip(
-            "每 1000 点经验的成本权重，缺少密音筒可提高。\n"
-            + self.cost_defaults_note)
         layout.addLayout(parameters)
         self.strategy_status = QLabel("策略等待计算")
         self.strategy_status.setObjectName("status")
@@ -821,14 +804,11 @@ class EchoWindow(QMainWindow):
         layout.addWidget(self.reconstruction_status)
         metrics = QHBoxLayout()
         self._metric_cards(metrics, [
-            ("probability", "当前锁法 · 单次升分概率", "严格超过当前原始评分的概率，与目标分数无关。"),
-            ("gain_on_success", "当前锁法 · 成功时平均 Δ 分",
-             "仅在单次重构严格超过当前原始评分时的平均提分，按结果概率加权；无正提升机会时显示“—”。"),
-            ("expected_cost_to_improve", "当前锁法 · 升分期望消耗",
-             "固定当前锁法反复尝试，首次严格超过原始评分即停的平均频整器消耗；"
-             "等于单次消耗 / 单次升分概率，不受当前预算限制；无升分机会时不可获得。"),
-            ("delta", "当前锁法 · 单次期望 Δ 分", "包含降分风险的期望分数变化，不是保证升分。"),
-            ("cost", "当前锁法 · 单次消耗", "锁1/2/3/4条分别消耗1/1/2/3枚频整器。"),
+            ("probability", "当前锁法 · 单次升分概率", ""),
+            ("gain_on_success", "当前锁法 · 成功时平均 Δ 分", ""),
+            ("expected_cost_to_improve", "当前锁法 · 升分期望消耗", ""),
+            ("delta", "当前锁法 · 单次期望 Δ 分", ""),
+            ("cost", "当前锁法 · 单次消耗", ""),
         ], self.reconstruction_metrics)
         layout.addLayout(metrics)
         tabs = QTabWidget()
@@ -856,15 +836,6 @@ class EchoWindow(QMainWindow):
         self.reconstruction_budget_table = table([
             "用法 / 枚", "首步锁定（后续重新选锁）", "首步消耗", "最终期望分数", "最终期望Δ分",
             "期望实际消耗", "期望次数", "平均升分 / 枚"])
-        for column, description in {
-            0: "动态择优按每次实际保留状态选择剩余花费；拆分行完整执行指定花费。不投入单独对照，不混入方案均值。",
-            1: "每次洗出候选可保留或拒绝，拒绝后仍用原词条且照扣材料；后续在实际保留的词条上重新选锁。",
-            3: "完整方案结束时评分的平均值，不是保证达到的分数。",
-            4: "最终实际保留评分减去开始评分的期望；包含接受/拒绝候选的选择，不混入未执行洗练的零收益。",
-            5: "方案实际用完预算，拒绝候选仍消耗本次频整器；不投入行的零消耗不参与方案平均。",
-            6: "实际执行洗练的次数；拒绝候选也算一次，拆分行执行完整指定次数。",
-        }.items():
-            self.reconstruction_budget_table.horizontalHeaderItem(column).setToolTip(description)
         self.reconstruction_budget_table.cellClicked.connect(self._apply_reconstruction_budget_plan)
         tabs.addTab(self.reconstruction_plans_table, "单次 · 全部 30 种锁法（点击套用）")
         tabs.addTab(self.reconstruction_budget_table, "同预算 · 动态换锁与花费拆分（点击套用首步）")
@@ -1055,7 +1026,6 @@ class EchoWindow(QMainWindow):
             for row, texts in enumerate(values):
                 for column, text in enumerate(texts):
                     item = QTableWidgetItem(text)
-                    item.setToolTip(text)
                     if column != 1:
                         delta_columns = (3, 4) if widget is self.reconstruction_plans_table else (4,)
                         if column in delta_columns and text != "—":

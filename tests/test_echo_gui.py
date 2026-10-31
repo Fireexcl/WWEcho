@@ -190,10 +190,6 @@ class EchoGuiTests(unittest.TestCase):
         grid = self.window.cost_parameters_layout
         self.assertEqual([grid.itemAtPosition(0, column).widget().text() for column in range(5)],
                  ["经验回收比例", "打孔器回收比例", "打孔器权重", "每1000经验权重", "胚子权重"])
-        self.assertIn("70%", self.window.strategy_inputs["recovery"].toolTip())
-        self.assertIn("30%", self.window.strategy_inputs["tuning_recovery"].toolTip())
-        self.assertIn("每 1000 点经验", self.window.strategy_inputs["experience_weight"].toolTip())
-        self.assertIn("12500", self.window.strategy_inputs["experience_weight"].toolTip())
         hint = self.window.result_hint.text()
         self.assertIn("每次 10 个打孔器", hint)
         self.assertIn("经验默认返还 70%", hint)
@@ -204,6 +200,23 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("保留不回收", hint)
         self.assertNotIn("失败回收", hint)
         self.assertNotIn("占位", hint)
+
+    def test_requested_input_tooltips_removed_other_hints_preserved(self):
+        for cost, box in self.window.weight_inputs["minor_stats"].items():
+            with self.subTest(cost=cost):
+                self.assertEqual(box.toolTip(), "")
+        self.assertEqual(self.window.cost_parameters_label.toolTip(), "")
+        for name in ("recovery", "tuning_recovery", "experience_weight"):
+            with self.subTest(parameter=name):
+                self.assertEqual(self.window.strategy_inputs[name].toolTip(), "")
+        for name, label in self.window.strategy_metrics.items():
+            with self.subTest(metric=name):
+                self.assertTrue(label.parentWidget().toolTip())
+        for section in self.window.sections:
+            self.assertTrue(section.toggle_button.toolTip())
+        self.assertTrue(self.window.progress.toolTip())
+        self.assertTrue(self.window.theoretical_max_help.toolTip())
+        self.assertTrue(self.window.reconstruction_budget.toolTip())
 
     def test_cost_default_inputs_read_config_and_forward_to_worker(self):
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
@@ -243,11 +256,14 @@ class EchoGuiTests(unittest.TestCase):
                     raise error
                 return load_json(path)
 
-            with self.subTest(error=error), patch("src.echo_gui.load_json", side_effect=unavailable_config):
+            with self.subTest(error=error), patch("src.echo_gui.load_json", side_effect=unavailable_config), \
+                    patch.object(sys.modules["src.echo_strategy"], "DEFAULT_COSTS", cost_path):
                 window = EchoWindow()
                 try:
                     self.assertIsNotNone(window._score_result)
-                    self.assertIn("成本默认配置不可用", window.cost_parameters_label.toolTip())
+                    self.assertEqual(window.cost_parameters_label.toolTip(), "")
+                    self.wait_until(lambda: str(error) in window.strategy_status.text())
+                    self.assertIn("策略计算失败（不影响评分）", window.strategy_status.text())
                 finally:
                     window.close()
                     window.deleteLater()
