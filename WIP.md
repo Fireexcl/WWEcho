@@ -17,20 +17,22 @@ WWEcho/
 │   ├── activation-recommendation-algorithms.md ## 激活建议算法设计；部分已有原型实现
 │   ├── desktop-app-plan.md       ## 桌面程序技术方案、功能规划与实施顺序
 │   ├── echo-tuning-strategy.md   ## 调谐规则、概率数据、数据来源与建模说明
-│   └── reconstruction-algorithms.md ## 频整器概率、收益、同预算比较与边际公式
+│   └── reconstruction-algorithms.md ## 频整器单次概率、动态换锁预算与最终方案收益
 ├── examples/
 │   └── echo.json                 ## 声骸输入示例
 ├── src/
 │   ├── echo_costs.py             ## 轻量成本配置：GUI 与策略共用的默认值和校验
 │   ├── echo_score.py             ## 评分核心、输入校验及 JSON 命令行入口
 │   ├── echo_strategy.py          ## 激活策略：概率上下界与材料权重累计成本最优停止
-│   ├── echo_reconstruction.py    ## 频整器：精确离散锁法分析与固定锁法预算比较
+│   ├── echo_reconstruction.py    ## 频整器：离散单次分析与动态预算入口
+│   ├── echo_reconstruction_budget.py ## 动态换锁：条件积分、花费拆分与停手决策
 │   └── echo_gui.py               ## PySide6 图形界面：评分与后台策略分析
 └── tests/
     ├── test_echo_score.py        # 评分、配置校验、非法输入及命令行测试
     ├── test_echo_gui.py          # GUI 交互、实时评分、后台任务及权重导入导出测试
     ├── test_echo_strategy.py     # 激活概率、累计成本策略、解析验证及边界测试
     ├── test_echo_reconstruction.py # 频整器概率、严格升分、预算及边际测试
+    ├── test_echo_dynamic_budget.py # 动态换锁与花费拆分的独立有理数穷举验证
     └── test_echo_reconstruction_gui.py # 区域4锁定按钮、表格、缓存及异步测试
 ```
 

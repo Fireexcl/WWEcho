@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from src import echo_reconstruction, echo_strategy
 from src.echo_gui import EchoWindow
-from src.echo_reconstruction import ReconstructionPlanner, compare_budget, evaluate_budget
+from src.echo_reconstruction import ReconstructionPlanner
 from src.echo_score import EchoScorer
 
 
@@ -47,10 +47,12 @@ class FastActivationPlanner:
 class ControlledReconstructionPlanner:
     @classmethod
     def reset(cls):
-        cls.instances, cls.calls = [], []
+        cls.instances, cls.calls, cls.budget_calls = [], [], []
         cls.active, cls.max_active = 0, 0
         cls.gate = threading.Event()
         cls.gate.set()
+        cls.budget_gate = threading.Event()
+        cls.budget_gate.set()
         cls.error = None
 
     def __init__(self, scorer):
@@ -74,6 +76,14 @@ class ControlledReconstructionPlanner:
         finally:
             cls.active -= 1
 
+    def compare_dynamic_budget(self, echo, budget, *, analysis=None, cancelled=None):
+        cls = type(self)
+        cls.budget_calls.append((self, budget, threading.get_ident()))
+        if not cls.budget_gate.wait(10):
+            raise RuntimeError("dynamic budget test timeout")
+        # 即使计算不响应取消，也必须由窗口版本检查拒绝旧预算的结果。
+        return self.real.compare_dynamic_budget(echo, budget, analysis=analysis)
+
 
 class ReconstructionGuiTests(unittest.TestCase):
     @classmethod
@@ -93,13 +103,14 @@ class ReconstructionGuiTests(unittest.TestCase):
     def tearDown(self):
         FastActivationPlanner.gate.set()
         ControlledReconstructionPlanner.gate.set()
+        ControlledReconstructionPlanner.budget_gate.set()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
         self.reconstruction_patch.stop()
         self.activation_patch.stop()
 
-    def wait_until(self, predicate, timeout=5):
+    def wait_until(self, predicate, timeout=15):
         deadline = time.monotonic() + timeout
         release_gil = threading.Event()
         while not predicate() and time.monotonic() < deadline:
@@ -132,7 +143,8 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertEqual(grid.rowCount(), 1)
         self.assertEqual(grid.columnCount(), 5)
         self.assertTrue(all(button.isCheckable() and not button.isEnabled() for button in buttons))
-        self.assertEqual(self.window.reconstruction_budget.value(), 4)
+        self.assertEqual(self.window.reconstruction_budget.value(), 3)
+        self.assertEqual(self.window.reconstruction_budget.maximum(), 6)
         self.assertIn("开满五条", self.window.reconstruction_status.text())
         self.fill_five()
         self.assertTrue(all(button.isEnabled() for button in buttons))
@@ -161,7 +173,7 @@ class ReconstructionGuiTests(unittest.TestCase):
         result = self.window._reconstruction_result
         table = self.window.reconstruction_plans_table
         self.assertEqual(table.rowCount(), 30)
-        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 4)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 6)
         for row, plan in enumerate(self.window._reconstruction_rows):
             self.assertEqual(table.item(row, 0).text(), str(plan["locked_count"]))
             self.assertEqual(table.item(row, 2).text(), f"{plan['probability']:.4%}")
@@ -195,34 +207,80 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.window.clear_sub_stats()
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
 
-    def test_budget_changes_reuse_cache_and_show_equal_budget_and_marginal_values(self):
+    def test_budget_changes_reuse_single_analysis_and_display_dynamic_terminal_values(self):
         self.fill_five()
         self.wait_for_result()
         result = self.window._reconstruction_result
         self.window.reconstruction_budget.setValue(2)
-        comparison = compare_budget(result["plans"], 2)
+        self.assertIsNone(self.window._reconstruction_result)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+        self.wait_for_result()
+        comparison = self.window._reconstruction_result["dynamic"]
+        self.assertEqual(comparison["budget"], 2)
         table = self.window.reconstruction_budget_table
-        for row, plan in enumerate(comparison["best_by_count"]):
+        for row, plan in enumerate(comparison["rows"]):
             value = plan["budget"]
-            self.assertEqual(table.item(row, 2).text(), f"{value['max_attempts']} 次 / {value['max_cost']} 枚")
-            if row < 2:
-                self.assertEqual(table.item(row, 3).text(), f"{value['success_probability']:.4%}")
-                self.assertEqual(table.item(row, 4).text(), f"{value['expected_delta']:+.4g}")
-                self.assertEqual(table.item(row, 7).text(), f"{value['next_marginal_delta']:+.4g}")
-                self.assertEqual(table.item(row, 8).text(), f"{value['next_marginal_cost']:.4g}")
-            else:
-                self.assertEqual(table.item(row, 1).text(), "预算不足")
-        self.assertEqual(table.item(0, 2).text(), "2 次 / 2 枚")
-        self.assertEqual(table.item(1, 2).text(), "1 次 / 2 枚")
+            self.assertEqual(table.item(row, 2).text(), f"{plan['cost']} 枚")
+            self.assertEqual(table.item(row, 3).text(), f"{value['expected_final_score']:.4g}")
+            self.assertEqual(table.item(row, 4).text(), f"{value['expected_delta']:+.4g}")
+            self.assertEqual(table.item(row, 5).text(), f"{value['expected_cost']:.4g}")
+            self.assertEqual(table.item(row, 6).text(), f"{value['expected_attempts']:.4g}")
+        self.assertEqual([table.item(row, 0).text() for row in range(table.rowCount())],
+                         ["不投入", "动态择优", "1+1", "2"])
+        table.cellClicked.emit(1, 1)
+        self.assertEqual(self.window.reconstruction_locks, set(comparison["rows"][1]["locked_ids"]))
         table.cellClicked.emit(0, 1)
-        before = set(self.window.reconstruction_locks)
-        table.cellClicked.emit(3, 1)
-        self.assertEqual(self.window.reconstruction_locks, before)
+        self.assertEqual(self.window.reconstruction_locks, set())
+        self.window.reconstruction_lock_buttons[0].click()
         self.window.reconstruction_budget.setValue(0)
-        self.assertIn("暂不投入", self.window.reconstruction_recommendation.text())
-        self.assertIn("最多 0 次 / 0 枚", self.window.reconstruction_selected.text())
+        self.wait_for_result()
+        self.assertIn("不执行洗练", self.window.reconstruction_recommendation.text())
+        self.assertIn("当前预算不足", self.window.reconstruction_selected.text())
         self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
-        self.assertIs(self.window._reconstruction_result, result)
+        self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
+        self.assertEqual([call[1] for call in ControlledReconstructionPlanner.budget_calls], [3, 2, 0])
+
+    def test_three_budget_paths_and_scope_are_explicit(self):
+        self.fill_five()
+        self.wait_for_result()
+        table = self.window.reconstruction_budget_table
+        self.assertEqual([table.item(row, 0).text() for row in range(table.rowCount())],
+                         ["不投入", "动态择优", "1+1+1", "1+2", "2+1", "3"])
+        self.assertIn("动态换锁", self.window.reconstruction_tabs.tabText(1))
+        self.assertIn("每次洗出候选可保留或拒绝", self.window.reconstruction_hint.text())
+        self.assertIn("不是首次超过原始评分即停", self.window.reconstruction_hint.text())
+        self.assertIn("不混入未执行洗练", table.horizontalHeaderItem(4).toolTip())
+        self.assertIn("拒绝后仍用原词条且照扣材料", table.horizontalHeaderItem(1).toolTip())
+        for row, attempts in ((2, "3"), (3, "2"), (4, "2"), (5, "1")):
+            self.assertEqual(table.item(row, 5).text(), "3")
+            self.assertEqual(table.item(row, 6).text(), attempts)
+        self.assertIn("动态", self.window.reconstruction_recommendation.text())
+        self.assertNotIn("下次边际", "".join(table.horizontalHeaderItem(column).text()
+                                             for column in range(table.columnCount())))
+
+    def test_stale_budget_results_are_rejected_and_latest_budget_reuses_distribution(self):
+        self.fill_five()
+        self.wait_for_result()
+        ControlledReconstructionPlanner.budget_gate.clear()
+        self.window.reconstruction_budget.setValue(2)
+        self.wait_until(lambda: len(ControlledReconstructionPlanner.budget_calls) == 2)
+        renders = []
+        display = self.window._display_reconstruction
+
+        def record(result):
+            renders.append(result["dynamic"]["budget"])
+            display(result)
+
+        self.window._display_reconstruction = record
+        self.window.reconstruction_budget.setValue(1)
+        self.wait_until(lambda: not self.window._reconstruction_timer.isActive())
+        ControlledReconstructionPlanner.budget_gate.set()
+        self.wait_for_result()
+        self.assertEqual(renders, [1])
+        self.assertEqual(self.window._reconstruction_result["dynamic"]["budget"], 1)
+        self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
+        self.assertEqual(len(ControlledReconstructionPlanner.instances), 1)
+        self.assertTrue(all(call[2] != threading.get_ident() for call in ControlledReconstructionPlanner.budget_calls))
 
     def test_tier_and_reselection_track_stat_identity_and_clear_incomplete_results(self):
         self.fill_five()
@@ -285,10 +343,31 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.assertEqual(table.item(row, 2).text(), "0.0000%")
             self.assertEqual(table.item(row, 4).text(), "—")
             self.assertEqual(table.item(row, 7).text(), "无法获得 / ∞")
-        self.assertIn("暂不投入", self.window.reconstruction_recommendation.text())
+        comparison = self.window._reconstruction_result["dynamic"]
+        self.assertTrue(all(row["budget"]["expected_cost"] == 3 for row in comparison["rows"][1:]))
+        self.assertTrue(all(row["budget"]["expected_delta"] == 0 for row in comparison["rows"]))
+        self.assertIn("实际使用 3 枚", self.window.reconstruction_recommendation.text())
         self.window.reconstruction_lock_buttons[0].click()
         self.assertIn("成功时平均Δ分 —", self.window.reconstruction_selected.text())
         self.assertIn("升分期望消耗 无法获得 / ∞", self.window.reconstruction_selected.text())
+
+    def test_dynamic_resource_error_keeps_single_analysis_unchanged_and_visible(self):
+        from src.echo_reconstruction_budget import BudgetResourceError
+
+        with patch.object(ControlledReconstructionPlanner, "compare_dynamic_budget",
+                          side_effect=BudgetResourceError("controlled dynamic resource limit")):
+            self.fill_five()
+            self.wait_for_result()
+            result = self.window._reconstruction_result
+            self.assertEqual(self.window.reconstruction_plans_table.rowCount(), 30)
+            self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+            self.assertIn("controlled dynamic resource limit", self.window.reconstruction_recommendation.text())
+            before = ReconstructionPlanner(EchoScorer(self.window.stats, self.window.current_weights())).analyze(
+                self.window.current_echo())
+            self.assertEqual(result["plans"], before["plans"])
+            self.window.reconstruction_lock_buttons[0].click()
+            self.assertIn("单次正提升概率", self.window.reconstruction_selected.text())
+            self.assertIn("动态结果暂不可用", self.window.reconstruction_selected.text())
 
     def test_separate_worker_runs_while_activation_is_blocked(self):
         FastActivationPlanner.gate.clear()
@@ -386,11 +465,14 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.reconstruction_patch.stop()
         self.fill_five()
         self.wait_for_result()
-        expected = ReconstructionPlanner(EchoScorer(self.window.stats, self.window.current_weights())).analyze(self.window.current_echo())
-        self.assertEqual(self.window._reconstruction_result, expected)
+        planner = ReconstructionPlanner(EchoScorer(self.window.stats, self.window.current_weights()))
+        expected = planner.analyze(self.window.current_echo())
+        comparison = planner.compare_dynamic_budget(self.window.current_echo(), 3, analysis=expected)
+        self.assertEqual(self.window._reconstruction_result, {**expected, "dynamic": comparison})
         self.window.reconstruction_lock_buttons[0].click()
         selected = next(plan for plan in expected["plans"] if plan["locked_ids"] == ["crit_rate"])
-        budget = evaluate_budget(selected, 4)
+        budget = next(plan["dynamic_budget"] for plan in comparison["first_plans"]
+                  if plan["locked_ids"] == ["crit_rate"])
         self.assertIn(f"单次正提升概率 {selected['probability']:.4%}", self.window.reconstruction_selected.text())
         self.assertIn(f"期望实际消耗 {budget['expected_cost']:.4g} 枚", self.window.reconstruction_selected.text())
 

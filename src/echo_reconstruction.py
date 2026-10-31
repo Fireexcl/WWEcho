@@ -1,4 +1,4 @@
-"""频整器：类型子集枚举、折半尾分布与固定锁法的有限预算比较。"""
+"""频整器：单次类型子集与折半尾分布，动态换锁预算入口及旧固定锁法 API。"""
 
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ class ReconstructionPlanner:
     def __init__(self, scorer: EchoScorer) -> None:
         self.scorer = scorer
         self.ids = list(scorer.tiers)
+        self.lock_costs = {1: 1, 2: 1, 3: 2, 4: 3}
         rules = scorer.stats["reconstruction"]
         self.limit = rules["required_activated_count"]
         if (self.limit != 5 or scorer.stats["sub_stats"]["max_count"] != 5
@@ -53,6 +54,8 @@ class ReconstructionPlanner:
                                                     "denominator": len(self.ids) - count}):
                 raise ValueError("重构锁数、重构数、候选池及类型概率不一致")
             self.lock_counts.append(count)
+        if set(self.lock_counts) != set(self.lock_costs):
+            raise ValueError("重构锁数与频整器消耗映射不一致")
 
         products: dict[str, list[Fraction]] = {}
         self.probabilities: dict[str, list[float]] = {}
@@ -89,6 +92,7 @@ class ReconstructionPlanner:
                                      for score, probability in zip(values, rational_probabilities[name]))
                             for name, values in self.scores.items()}
         self._halves: dict[tuple[str, ...], ScoreDistribution] = {}
+        self._adaptive: Any = None
 
     def _points(self, score: int | Fraction) -> float:
         return float(score * self.point_scale)
@@ -179,16 +183,17 @@ class ReconstructionPlanner:
                     negative_gain = -delta
                 elif probability == 1:
                     negative_gain = 0.0
+                cost = self.lock_costs[count]
                 plans.append({
                     "locked_ids": [item["stat_id"] for item in locked_entries],
                     "locked_stats": list(locked_entries), "locked_count": count,
-                    "rerolled_count": rerolled, "cost": count,
+                    "rerolled_count": rerolled, "cost": cost,
                     "probability": probability, "expected_delta": delta,
                     "expected_positive_gain": positive_gain,
                     "expected_negative_gain": negative_gain,
                     "gain_on_success": positive_gain / probability if probability else None,
-                    "expected_cost_to_improve": count / probability if probability else None,
-                    "positive_gain_per_transducer": positive_gain / count,
+                    "expected_cost_to_improve": cost / probability if probability else None,
+                    "positive_gain_per_transducer": positive_gain / cost,
                 })
         current_score = math.fsum([
             self.scorer.stat_score("main_stats", result["main_stat"]["stat_id"],
@@ -200,6 +205,16 @@ class ReconstructionPlanner:
         return {"plans": plans, "current_score": current_score,
                 "method": "类型子集枚举 + 折半尾分布；十进制整数贡献严格比较，无分数网格"}
 
+    def compare_dynamic_budget(self, echo: dict[str, Any], budget: int, *,
+                               analysis: Optional[dict[str, Any]] = None,
+                               cancelled: Optional[Event] = None) -> dict[str, Any]:
+        """每次重构后按完整新状态与剩余预算重新选锁，最大化最终分数期望。"""
+        if self._adaptive is None:
+            from src.echo_reconstruction_budget import AdaptiveBudgetPlanner
+
+            self._adaptive = AdaptiveBudgetPlanner(self)
+        return self._adaptive.compare(echo, budget, analysis=analysis, cancelled=cancelled)
+
 
 def evaluate_budget(plan: dict[str, Any], budget: int) -> dict[str, Any]:
     """固定原始锁法，独立重构，首次超过原始分即停；否则保留最后一次结果。
@@ -210,6 +225,8 @@ def evaluate_budget(plan: dict[str, Any], budget: int) -> dict[str, Any]:
     if type(budget) is not int or budget < 0:
         raise ValueError("频整器预算必须为非负整数")
     cost = plan["cost"]
+    if type(cost) is not int or cost <= 0:
+        raise ValueError("单次频整器消耗必须为正整数")
     attempts = budget // cost
     probability = plan["probability"]
     positive = plan["expected_positive_gain"]
@@ -257,7 +274,7 @@ def evaluate_budget(plan: dict[str, Any], budget: int) -> dict[str, Any]:
 
 
 def compare_budget(plans: list[dict[str, Any]], budget: int) -> dict[str, Any]:
-    """枚举全部锁法，各锁数以终态期望升分择优，允许不投入。"""
+    """旧固定锁法 API；界面已改用 compare_dynamic_budget，不可用于动态换锁。"""
     evaluated = [{**plan, "budget": evaluate_budget(plan, budget)} for plan in plans]
 
     def priority(item: dict[str, Any]) -> tuple[float, float, float]:

@@ -13,6 +13,10 @@ from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 
 
 class ReconstructionTests(unittest.TestCase):
+    @staticmethod
+    def lock_cost(locked_count):
+        return {1: 1, 2: 1, 3: 2, 4: 3}[locked_count]
+
     def setUp(self):
         self.stats = load_json(DEFAULT_STATS)
         self.weights = load_json(DEFAULT_WEIGHTS)
@@ -91,7 +95,7 @@ class ReconstructionTests(unittest.TestCase):
                 self.assertAlmostEqual(plan["probability"], p, places=13)
                 self.assertAlmostEqual(plan["expected_positive_gain"], gain, places=12)
                 self.assertAlmostEqual(plan["expected_delta"], delta, places=12)
-                self.assertEqual(plan["cost"], plan["locked_count"])
+                self.assertEqual(plan["cost"], self.lock_cost(plan["locked_count"]))
                 self.assertEqual(plan["rerolled_count"] + plan["locked_count"], 5)
                 self.assertAlmostEqual(plan["positive_gain_per_transducer"], gain / plan["cost"])
                 if p:
@@ -282,6 +286,9 @@ class BudgetTests(unittest.TestCase):
         for invalid in (-1, 1.5, True):
             with self.assertRaises(ValueError):
                 evaluate_budget(self.plan(), invalid)
+        for invalid in (0, -1, 1.5, True):
+            with self.assertRaises(ValueError):
+                evaluate_budget(self.plan(cost=invalid), 1)
 
     def test_tiny_probability_uses_stable_complement(self):
         value = evaluate_budget(self.plan(p=1e-20, gain=2e-20, delta=-1), 4)
