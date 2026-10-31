@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import QThread
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QFrame
 
 from src import echo_reconstruction, echo_strategy
 from src.echo_gui import EchoWindow
@@ -137,6 +137,54 @@ class ReconstructionGuiTests(unittest.TestCase):
                         and self.window._reconstruction_result["dynamic"]["budget"]
                         == self.window.reconstruction_budget.value())
 
+    def test_clear_locks_button_is_right_aligned_and_matches_clear_selection_style(self):
+        button = self.window.clear_reconstruction_locks_button
+        reference = self.window.clear_sub_stats_button
+        self.assertEqual(button.objectName(), reference.objectName())
+        layout = button.parentWidget().layout()
+        toolbar = layout.itemAt(2).layout()
+        self.assertEqual(toolbar.count(), 4)
+        self.assertIs(toolbar.itemAt(1).widget(), self.window.reconstruction_budget)
+        self.assertIsNotNone(toolbar.itemAt(2).spacerItem())
+        self.assertIs(toolbar.itemAt(3).widget(), button)
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(button.geometry().right(), toolbar.contentsRect().right())
+        self.assertEqual(button.palette().button().color(), reference.palette().button().color())
+        self.assertEqual(button.palette().buttonText().color(), reference.palette().buttonText().color())
+
+    def test_reconstruction_divider_replaces_success_status_and_prompts_return(self):
+        status = self.window.reconstruction_status
+        layout = status.parentWidget().layout()
+        divider = layout.itemAt(3).widget()
+        self.assertIsInstance(divider, QFrame)
+        self.assertIs(divider, self.window.reconstruction_divider)
+        self.assertEqual(divider.objectName(), "divider")
+        self.assertEqual(divider.frameShape(), QFrame.Shape.HLine)
+        self.assertEqual(divider.height(), 1)
+        self.assertFalse(status.isHidden())
+        self.assertIn("开满五条", status.text())
+        self.fill_five()
+        self.wait_for_result()
+        self.assertEqual(status.text(), "")
+        self.assertTrue(status.isHidden())
+        self.assertFalse(divider.isHidden())
+        ControlledReconstructionPlanner.budget_gate.clear()
+        self.window.reconstruction_budget.setValue(2)
+        self.assertFalse(status.isHidden())
+        self.assertIn("等待后台计算", status.text())
+        self.wait_until(lambda: len(ControlledReconstructionPlanner.budget_calls) == 2)
+        self.assertFalse(status.isHidden())
+        self.assertIn("后台计算中", status.text())
+        ControlledReconstructionPlanner.budget_gate.set()
+        self.wait_for_result()
+        self.assertEqual(status.text(), "")
+        self.assertTrue(status.isHidden())
+        self.window.clear_sub_stats_button.click()
+        self.assertFalse(status.isHidden())
+        self.assertIn("开满五条", status.text())
+        self.assertFalse(divider.isHidden())
+
     def test_five_buttons_require_full_echo_and_limit_locks_to_four(self):
         buttons = self.window.reconstruction_lock_buttons
         self.assertEqual(len(buttons), 5)
@@ -171,6 +219,16 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertTrue(all(not button.isChecked() for button in buttons))
         self.assertIn("尚未锁定", self.window.reconstruction_selected.text())
 
+    def test_single_and_budget_summaries_share_notice_style(self):
+        selected = self.window.reconstruction_selected
+        recommendation = self.window.reconstruction_recommendation
+        for label in (selected, recommendation):
+            label.ensurePolished()
+            self.assertEqual(label.objectName(), "notice")
+        self.assertEqual(selected.font(), recommendation.font())
+        self.assertEqual(selected.palette().windowText().color(),
+                         recommendation.palette().windowText().color())
+
     def test_all_thirty_rows_and_selected_probability_match_real_api(self):
         self.fill_five()
         self.wait_for_result()
@@ -182,23 +240,49 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.assertEqual(table.item(row, 0).text(), str(plan["locked_count"]))
             self.assertEqual(table.item(row, 2).text(), f"{plan['probability']:.4%}")
             self.assertEqual(table.item(row, 3).text(), f"{plan['expected_delta']:+.4g}")
+            self.assertEqual(table.item(row, 4).text(),
+                             "—" if plan["gain_on_success"] is None else f"{plan['gain_on_success']:.4g}")
             self.assertEqual(table.item(row, 5).text(), str(plan["cost"]))
             self.assertEqual(table.item(row, 6).text(), f"{plan['positive_gain_per_transducer']:.4g}")
         table.cellClicked.emit(8, 1)
         selected = self.window._reconstruction_rows[8]
         self.assertEqual(self.window.reconstruction_locks, set(selected["locked_ids"]))
         self.assertIn(f"单次正提升概率 {selected['probability']:.4%}", self.window.reconstruction_selected.text())
+        self.assertEqual(len(self.window.reconstruction_selected.text().splitlines()), 3)
+        self.assertNotIn("预算", self.window.reconstruction_selected.text())
+        self.assertNotIn("最终期望", self.window.reconstruction_selected.text())
+        self.assertEqual(self.window.reconstruction_metrics["gain_on_success"].text(), table.item(8, 4).text())
         self.assertIs(self.window._reconstruction_result, result)
         self.assertEqual(len(table.selectionModel().selectedRows()), 1)
         self.assertEqual(table.selectionModel().selectedRows()[0].row(), 8)
 
+    def test_metric_cards_use_four_equal_columns_in_expected_order(self):
+        metrics = self.window.reconstruction_metrics
+        cards = self.window.reconstruction_status.parentWidget().layout().itemAt(7).layout()
+        self.assertIsInstance(cards, QHBoxLayout)
+        self.assertEqual(cards.count(), 4)
+        for column, name in enumerate(("probability", "gain_on_success", "delta", "cost")):
+            self.assertIs(cards.itemAt(column).widget(), metrics[name].parentWidget())
+            self.assertEqual(cards.stretch(column), 1)
+        caption = metrics["gain_on_success"].parentWidget().layout().itemAt(0).widget()
+        self.assertEqual(caption.text(), "当前锁法 · 成功时平均 Δ 分")
+        for section in self.window.sections[:-1]:
+            section.toggle_button.click()
+        self.window.resize(760, 940)
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(self.window.centralWidget().horizontalScrollBar().maximum(), 0)
+
     def test_metric_cards_follow_selected_plan_and_clear_stale_results(self):
         self.fill_five()
         self.wait_for_result()
-        self.window.reconstruction_plans_table.cellClicked.emit(8, 1)
-        selected = self.window._reconstruction_rows[8]
+        row, selected = next((row, plan) for row, plan in enumerate(self.window._reconstruction_rows)
+                             if plan["gain_on_success"] is not None)
+        self.window.reconstruction_plans_table.cellClicked.emit(row, 1)
         metrics = self.window.reconstruction_metrics
         self.assertEqual(metrics["probability"].text(), f"{selected['probability']:.4%}")
+        self.assertEqual(metrics["gain_on_success"].text(), f"{selected['gain_on_success']:.4g}")
+        self.assertEqual(metrics["gain_on_success"].property("tone"), "positive")
         self.assertEqual(metrics["delta"].text(), f"{selected['expected_delta']:+.4g}")
         self.assertEqual(metrics["cost"].text(), f"{selected['cost']} 枚")
         self.assertEqual(metrics["delta"].property("tone"),
@@ -206,10 +290,12 @@ class ReconstructionGuiTests(unittest.TestCase):
                          "negative" if selected["expected_delta"] < 0 else "muted")
         self.window.clear_reconstruction_locks()
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
+        self.assertEqual(metrics["gain_on_success"].property("tone"), "muted")
         self.window.reconstruction_lock_buttons[0].click()
         self.assertNotEqual(metrics["cost"].text(), "—")
         self.window.clear_sub_stats()
         self.assertTrue(all(label.text() == "—" for label in metrics.values()))
+        self.assertEqual(metrics["gain_on_success"].property("tone"), "muted")
 
     def test_budget_changes_reuse_single_analysis_and_display_dynamic_terminal_values(self):
         self.fill_five()
@@ -237,10 +323,12 @@ class ReconstructionGuiTests(unittest.TestCase):
         table.cellClicked.emit(0, 1)
         self.assertEqual(self.window.reconstruction_locks, set())
         self.window.reconstruction_lock_buttons[0].click()
+        summary = self.window.reconstruction_selected.text()
         self.window.reconstruction_budget.setValue(0)
+        self.assertEqual(self.window.reconstruction_selected.text(), summary)
         self.wait_for_result()
         self.assertIn("不执行洗练", self.window.reconstruction_recommendation.text())
-        self.assertIn("当前预算不足", self.window.reconstruction_selected.text())
+        self.assertEqual(self.window.reconstruction_selected.text(), summary)
         self.assertEqual(len(ControlledReconstructionPlanner.calls), 1)
         self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
         self.assertEqual([call[1] for call in ControlledReconstructionPlanner.budget_calls], [3, 2, 0])
@@ -262,6 +350,7 @@ class ReconstructionGuiTests(unittest.TestCase):
         single = self.window._reconstruction_result["plans"]
         locks = self.window.reconstruction_locks.copy()
         metrics = {name: label.text() for name, label in self.window.reconstruction_metrics.items()}
+        summary = self.window.reconstruction_selected.text()
         current = (table.currentRow(), table.currentColumn())
         scroll = scrollbar.value()
         data_changes = QSignalSpy(table.model().dataChanged)
@@ -283,6 +372,7 @@ class ReconstructionGuiTests(unittest.TestCase):
                 self.assertEqual(self.window.reconstruction_locks, locks)
                 self.assertEqual({name: label.text() for name, label
                                   in self.window.reconstruction_metrics.items()}, metrics)
+                self.assertEqual(self.window.reconstruction_selected.text(), summary)
                 self.assertEqual((table.currentRow(), table.currentColumn()), current)
                 self.assertEqual([index.row() for index in table.selectionModel().selectedRows()], [8])
                 self.assertEqual(scrollbar.value(), scroll)
@@ -302,6 +392,8 @@ class ReconstructionGuiTests(unittest.TestCase):
         table = self.window.reconstruction_plans_table
         single = self.window._reconstruction_result["plans"]
         cell = table.item(8, 2)
+        table.cellClicked.emit(8, 1)
+        summary = self.window.reconstruction_selected.text()
         failures = [
             (2, ValueError("controlled budget failure"), "controlled budget failure"),
             (1, {"budget": 1}, "频整器结果格式有误"),
@@ -315,6 +407,7 @@ class ReconstructionGuiTests(unittest.TestCase):
                         compare.return_value = response
                     self.window.reconstruction_budget.setValue(budget)
                     self.wait_until(lambda: message in self.window.reconstruction_status.text())
+                self.assertFalse(self.window.reconstruction_status.isHidden())
                 self.assertIs(self.window._reconstruction_result["plans"], single)
                 self.assertIsNone(self.window._reconstruction_result["dynamic"])
                 self.assertEqual(table.rowCount(), 30)
@@ -324,7 +417,7 @@ class ReconstructionGuiTests(unittest.TestCase):
                 self.assertEqual(self.window.reconstruction_locks,
                                  set(self.window._reconstruction_rows[8]["locked_ids"]))
                 self.assertIn("单次正提升概率", self.window.reconstruction_selected.text())
-                self.assertIn("同预算动态结果尚未就绪", self.window.reconstruction_selected.text())
+                self.assertEqual(self.window.reconstruction_selected.text(), summary)
                 self.assertTrue(all(label.text() != "—"
                                     for label in self.window.reconstruction_metrics.values()))
         self.window._reconstruction_budget_changed()
@@ -461,6 +554,9 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertIn("实际使用 3 枚", self.window.reconstruction_recommendation.text())
         self.window.reconstruction_lock_buttons[0].click()
         self.assertIn("成功时平均Δ分 —", self.window.reconstruction_selected.text())
+        gain = self.window.reconstruction_metrics["gain_on_success"]
+        self.assertEqual(gain.text(), "—")
+        self.assertEqual(gain.property("tone"), "muted")
         self.assertIn("升分期望消耗 无法获得 / ∞", self.window.reconstruction_selected.text())
 
     def test_dynamic_resource_error_keeps_single_analysis_unchanged_and_visible(self):
@@ -479,10 +575,12 @@ class ReconstructionGuiTests(unittest.TestCase):
             self.assertEqual(result["plans"], before["plans"])
             self.window.reconstruction_lock_buttons[0].click()
             self.assertIn("单次正提升概率", self.window.reconstruction_selected.text())
-            self.assertIn("动态结果暂不可用", self.window.reconstruction_selected.text())
+            summary = self.window.reconstruction_selected.text()
+            self.assertNotIn("动态", summary)
             cell = self.window.reconstruction_plans_table.item(0, 2)
             self.window.reconstruction_budget.setValue(2)
             self.wait_for_result()
+            self.assertEqual(self.window.reconstruction_selected.text(), summary)
             self.assertIs(self.window.reconstruction_plans_table.item(0, 2), cell)
             self.assertIs(self.window._reconstruction_result["plans"], result["plans"])
             self.assertIn("controlled dynamic resource limit", self.window.reconstruction_recommendation.text())
@@ -529,6 +627,7 @@ class ReconstructionGuiTests(unittest.TestCase):
         ControlledReconstructionPlanner.error = ValueError("controlled reconstruction failure")
         self.fill_five()
         self.wait_until(lambda: "controlled reconstruction failure" in self.window.reconstruction_status.text())
+        self.assertFalse(self.window.reconstruction_status.isHidden())
         score = self.window.score_label.text()
         self.assertNotEqual(score, "—")
         self.assertEqual(self.window.reconstruction_plans_table.rowCount(), 0)
@@ -589,10 +688,10 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertEqual(self.window._reconstruction_result, {**expected, "dynamic": comparison})
         self.window.reconstruction_lock_buttons[0].click()
         selected = next(plan for plan in expected["plans"] if plan["locked_ids"] == ["crit_rate"])
-        budget = next(plan["dynamic_budget"] for plan in comparison["first_plans"]
-                  if plan["locked_ids"] == ["crit_rate"])
+        budget = comparison["recommendation"]["budget"]
         self.assertIn(f"单次正提升概率 {selected['probability']:.4%}", self.window.reconstruction_selected.text())
-        self.assertIn(f"期望实际消耗 {budget['expected_cost']:.4g} 枚", self.window.reconstruction_selected.text())
+        self.assertNotIn("期望实际消耗", self.window.reconstruction_selected.text())
+        self.assertIn(f"期望实际消耗 {budget['expected_cost']:.4g} 枚", self.window.reconstruction_recommendation.text())
 
 
 if __name__ == "__main__":
