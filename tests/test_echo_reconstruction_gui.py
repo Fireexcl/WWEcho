@@ -7,11 +7,13 @@ import copy
 import threading
 import time
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QThread
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QFrame, QLabel
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QFrame, QLabel, QMessageBox
 
 from src import echo_reconstruction, echo_strategy
 from src.echo_gui import EchoWindow
@@ -92,6 +94,19 @@ class ReconstructionGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path_patch = patch("src.echo_gui.weight_presets_path",
+                           return_value=Path(directory.name) / "weight-presets.json")
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+        legacy_patch = patch("src.echo_gui.legacy_weight_presets_path",
+                     return_value=Path(directory.name) / "legacy" / "weight-presets.json")
+        legacy_patch.start()
+        self.addCleanup(legacy_patch.stop)
+        dialog_patch = patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch.start()
+        self.addCleanup(dialog_patch.stop)
         FastActivationPlanner.reset()
         ControlledReconstructionPlanner.reset()
         self.activation_patch = patch.object(echo_strategy, "ActivationPlanner", FastActivationPlanner)
@@ -574,6 +589,24 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.wait_for_result()
         self.assertEqual(len(ControlledReconstructionPlanner.instances), 2)
         self.assertNotEqual(self.window._reconstruction_result, result)
+
+    def test_weight_preset_switch_refreshes_both_reconstruction_pages(self):
+        default_id = self.window.preset_store.selected_id
+        self.fill_five()
+        self.wait_for_result()
+        original = self.window._reconstruction_result
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QInputDialog.getText", return_value=("频整测试", True)):
+            self.assertTrue(self.window.save_weights_as())
+        self.wait_for_result()
+        self.assertNotEqual(self.window._reconstruction_result, original)
+        combo = self.window.weight_preset_combo
+        combo.setCurrentIndex(combo.findData(default_id))
+        self.assertIsNone(self.window._reconstruction_result)
+        self.assertEqual(self.window.reconstruction_plans_table.rowCount(), 0)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+        self.wait_for_result()
+        self.assertEqual(self.window._reconstruction_result, original)
 
     def test_no_improvement_displays_undefined_gain_and_infinite_success_cost(self):
         self.fill_five()

@@ -3,3 +3,6 @@
 __pycache__/
 /build/
 /dist/
+/weight-presets.json
+/weight-presets.json.lock
+/.weight-presets.json.*.tmp

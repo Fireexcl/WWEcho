@@ -7,6 +7,7 @@ WWEcho/
 ├── requirements.txt              # GUI 依赖：PySide6-Essentials
 ├── run.sh                        # GUI 启动脚本：cmd ./run.sh 启动
 ├── .gitignore                    # Git 忽略规则
+├── weight-presets.json           # 本地权重方案库，运行时创建；打包后与 EXE 同目录
 ├── .vscode/
 │   └── tasks.json                ## VS Code 任务：启动声骸评分 GUI
 ├── config/
@@ -22,6 +23,7 @@ WWEcho/
 │   └── echo.json                 ## 声骸输入示例
 ├── src/
 │   ├── echo_costs.py             ## 轻量成本配置：GUI 与策略共用的默认值和校验
+│   ├── echo_weight_presets.py    ## 权重方案：命名管理、最近选择、旧格式兼容及原子保存
 │   ├── echo_score.py             ## 评分核心、输入校验及 JSON 命令行入口
 │   ├── echo_strategy.py          ## 激活策略：概率上下界与材料权重累计成本最优停止
 │   ├── echo_reconstruction.py    ## 频整器：离散单次分析与动态预算入口
@@ -30,6 +32,7 @@ WWEcho/
 └── tests/
     ├── test_echo_score.py        # 评分、配置校验、非法输入及命令行测试
     ├── test_echo_gui.py          # GUI 交互、实时评分、后台任务及权重导入导出测试
+    ├── test_echo_weight_presets.py # 权重方案持久化、名称校验、兼容及写入失败保护
     ├── test_echo_strategy.py     # 激活概率、累计成本策略、解析验证及边界测试
     ├── test_echo_reconstruction.py # 频整器概率、严格升分、预算及边际测试
     ├── test_echo_dynamic_budget.py # 动态换锁与花费拆分的独立有理数穷举验证

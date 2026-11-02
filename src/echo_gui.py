@@ -11,17 +11,18 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
-    QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QMainWindow, QMessageBox,
+    QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
+from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, atomic_write_json, normalize_weights
 
 
 STYLE = """
@@ -47,6 +48,7 @@ QLabel#badge { background: #edf3ff; color: #2456a6; border-radius: 8px;
               padding: 6px 12px; font-weight: 600; }
 QLabel#notice { background: #f0f5ff; border: 1px solid #dae6fc;
                border-radius: 10px; padding: 12px; color: #294c80; }
+QLabel#customWeightsNotice { color: #b91c1c; font-size: 12px; }
 QLabel#status { font-size: 12px; color: #65758b; padding: 4px 0; }
 QFrame#metricCard { background: #f6f8fc; border: 1px solid #e4eaf3; border-radius: 10px; }
 QFrame#divider { background: #e0e6ef; border: none; max-height: 1px; }
@@ -71,6 +73,8 @@ QPushButton:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
 QComboBox, QSpinBox, QDoubleSpinBox { background: white; border: 1px solid #ced9e7;
                                    border-radius: 7px; padding: 6px 8px; min-height: 22px;
                                    selection-background-color: #2563eb; }
+QDoubleSpinBox[weightEditor="true"][nonzero="true"] {
+    color: #b45309; background: #fff8eb; font-weight: 600; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e8effc;
                             selection-color: #1d4ed8; padding: 4px; }
 QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
@@ -93,6 +97,20 @@ QScrollBar::handle:vertical { background: #c5cfdf; border-radius: 4px; min-heigh
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QStatusBar { background: #f4f6fa; color: #65758b; }
 """
+
+
+def weight_presets_path() -> Path:
+    """源码保存到项目根目录，打包后保存到 EXE 旁，不使用启动工作目录或解包目录。"""
+    if getattr(sys, "frozen", False):
+        directory = Path(sys.executable).resolve().parent
+    else:
+        directory = Path(__file__).resolve().parent.parent
+    return directory / "weight-presets.json"
+
+
+def legacy_weight_presets_path() -> Path:
+    """仅在本地库不存在时读取旧版用户目录，用于迁移；不在该目录创建或写入文件。"""
+    return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)) / "weight-presets.json"
 
 
 class CollapsibleSection(QFrame):
@@ -314,7 +332,7 @@ class ReconstructionTask(QRunnable):
 
 
 class EchoWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, presets_path: Path | None = None) -> None:
         super().__init__()
         self.stats = load_json(DEFAULT_STATS)
         self.defaults = load_json(DEFAULT_WEIGHTS)
@@ -329,9 +347,13 @@ class EchoWindow(QMainWindow):
             # 成本配置不可用时仍可评分；具体策略错误由后台计算单独报告。
             self.cost_defaults = activation_defaults({})
             self.cost_defaults_note = f"成本默认配置不可用，暂用兼容默认值：{exc}"
-        default_scorer = EchoScorer(self.stats, self.defaults)
-        self.defaults["main_stats"] = deepcopy(default_scorer.main_weights_by_cost)
-        self.defaults["minor_stats"] = deepcopy(default_scorer.minor_weights_by_cost)
+        self.defaults = normalize_weights(self.stats, self.defaults)
+        local_presets = presets_path if presets_path is not None else weight_presets_path()
+        self.preset_store = WeightPresetStore(
+            local_presets, self.stats, self.defaults,
+            legacy_path=legacy_weight_presets_path()
+            if presets_path is None and not local_presets.exists() else None)
+        self._weights_dirty = False
         self.updating = True
         self._closing = False
         self._strategy_version = 0
@@ -362,6 +384,8 @@ class EchoWindow(QMainWindow):
         self._reconstruction_timer.timeout.connect(self._start_reconstruction)
         self.reconstruction_locks: set[str] = set()
         self.weight_inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
+        self.weight_tables: dict[str, QTableWidget] = {}
+        self.clear_weight_buttons: dict[str, QPushButton] = {}
         self.sub_stat_buttons: dict[str, QPushButton] = {}
         self.selected_sub_stats: list[str] = []
         self.sub_tier_inputs: dict[str, QComboBox] = {}
@@ -398,7 +422,14 @@ class EchoWindow(QMainWindow):
         self.setCentralWidget(scroll)
         self._refresh_main()
         self.updating = False
+        self._refresh_weight_state()
         self.calculate()
+        if self.preset_store.initial_save_error:
+            self.statusBar().showMessage(
+                f"方案尚未保存，仍可评分；请将程序放在可写目录后重试保存或导出："
+                f"{self.preset_store.path} · {self.preset_store.initial_save_error}")
+        elif self.preset_store.migrated_from is not None:
+            self.statusBar().showMessage(f"已将旧版权重方案迁移至：{self.preset_store.path}", 10000)
 
     @staticmethod
     def _divider() -> QFrame:
@@ -479,25 +510,48 @@ class EchoWindow(QMainWindow):
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         toolbar.addWidget(hint, 1)
-        for text, callback in [("导入", self.import_weights), ("导出", self.export_weights),
-                               ("恢复默认", self.restore_weights)]:
+        for text, callback in [("导入", self.import_weights), ("导出", self.export_weights)]:
             button = QPushButton(text)
             button.clicked.connect(callback)
             toolbar.addWidget(button)
         layout.addLayout(toolbar)
-        self.weight_source_label = QLabel("默认-爱弥斯-企鹅bot")
-        self.weight_source_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.weight_source_label.setWordWrap(True)
-        layout.addWidget(self.weight_source_label)
+        presets = QHBoxLayout()
+        presets.addWidget(QLabel("权重方案"))
+        self.weight_preset_combo = QComboBox()
+        self.weight_preset_combo.setMinimumContentsLength(12)
+        self.weight_preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.weight_preset_combo.setAccessibleName("权重方案")
+        self.weight_preset_combo.currentIndexChanged.connect(self._select_weight_preset)
+        presets.addWidget(self.weight_preset_combo, 1)
+        self.save_weights_button = QPushButton("保存修改")
+        self.save_weights_button.clicked.connect(self.save_weights)
+        presets.addWidget(self.save_weights_button)
+        self.save_weights_as_button = QPushButton("另存为")
+        self.save_weights_as_button.clicked.connect(self.save_weights_as)
+        presets.addWidget(self.save_weights_as_button)
+        self.manage_weights_button = QPushButton("管理")
+        menu = QMenu(self.manage_weights_button)
+        self.rename_weights_action = menu.addAction("重命名")
+        self.rename_weights_action.triggered.connect(self.rename_weights)
+        self.delete_weights_action = menu.addAction("删除")
+        self.delete_weights_action.triggered.connect(self.delete_weights)
+        self.manage_weights_button.setMenu(menu)
+        presets.addWidget(self.manage_weights_button)
+        layout.addLayout(presets)
+        self._refresh_weight_options()
         tabs = QTabWidget()
         self.weight_tabs = tabs
-        groups = [("sub_stats", "副词条权重", self.defaults["sub_stats"])] + [
-            (f"main_stats_{cost}", f"Cost {cost} 主词条权重", self.defaults["main_stats"][cost])
+        weights = self.preset_store.current["weights"]
+        groups = [("sub_stats", "副词条权重", weights["sub_stats"])] + [
+            (f"main_stats_{cost}", f"Cost {cost} 主词条权重", weights["main_stats"][cost])
             for cost in ("1", "3", "4")]
         groups.append(("minor_stats", "小词条权重", {
-            cost: next(iter(self.defaults["minor_stats"][cost].values()))
+            cost: next(iter(weights["minor_stats"][cost].values()))
             for cost in ("4", "3", "1")}))
         for category, title, values in groups:
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(8, 8, 8, 8)
             pairs_per_row = 2
             row_count = (len(values) + pairs_per_row - 1) // pairs_per_row
             table = QTableWidget(row_count, pairs_per_row * 2)
@@ -519,19 +573,74 @@ class EchoWindow(QMainWindow):
                     label = self.stats["stat_definitions"][stat_id]["name_zh"]
                 table.setItem(row, column, QTableWidgetItem(label))
                 box = self._number(value, manual_only=True)
+                box.setProperty("weightEditor", True)
                 box.valueChanged.connect(self._weight_changed)
                 table.setCellWidget(row, column + 1, box)
                 table.setRowHeight(row, 44)
                 self.weight_inputs[category][stat_id] = box
-            tabs.addTab(table, title)
+            self.weight_tables[category] = table
+            page_layout.addWidget(table)
+            page_layout.addStretch()
+            footer = QHBoxLayout()
+            footer.addStretch()
+            clear = QPushButton("一键清零")
+            clear.setObjectName("clearSelection")
+            clear.setAccessibleName(f"清零{title}")
+            clear.clicked.connect(lambda _checked=False, selected=category: self.clear_weight_page(selected))
+            self.clear_weight_buttons[category] = clear
+            footer.addWidget(clear)
+            page_layout.addLayout(footer)
+            tabs.addTab(page, title)
         layout.addWidget(tabs)
         return group
 
     def _weight_changed(self) -> None:
         if self.updating:
             return
-        self.weight_source_label.setText("自定义权重")
+        self._refresh_weight_state()
         self.calculate()
+
+    def _refresh_weight_options(self) -> None:
+        previous = self.weight_preset_combo.blockSignals(True)
+        try:
+            self.weight_preset_combo.clear()
+            for preset in self.preset_store.presets:
+                self.weight_preset_combo.addItem(preset["name"], preset["id"])
+            self.weight_preset_combo.setCurrentIndex(
+                self.weight_preset_combo.findData(self.preset_store.selected_id))
+        finally:
+            self.weight_preset_combo.blockSignals(previous)
+
+    def _refresh_weight_state(self) -> None:
+        preset = self.preset_store.current
+        self._weights_dirty = not self.preset_store.persisted or self.current_weights() != preset["weights"]
+        index = self.weight_preset_combo.findData(preset["id"])
+        self.weight_preset_combo.setItemText(index, preset["name"] + (" *" if self._weights_dirty else ""))
+        self.custom_weights_notice.setVisible(self._weights_dirty)
+        self.delete_weights_action.setEnabled(len(self.preset_store.presets) > 1)
+        for inputs in self.weight_inputs.values():
+            for box in inputs.values():
+                nonzero = box.value() != 0
+                if box.property("nonzero") != nonzero:
+                    box.setProperty("nonzero", nonzero)
+                    box.style().unpolish(box)
+                    box.style().polish(box)
+                    box.update()
+
+    def clear_weight_page(self, category: str) -> None:
+        previous = self.updating
+        self.updating = True
+        try:
+            for box in self.weight_inputs[category].values():
+                box.setValue(0)
+        finally:
+            self.updating = previous
+        self._weight_changed()
+
+    def _commit_weight_edits(self) -> None:
+        for inputs in self.weight_inputs.values():
+            for box in inputs.values():
+                box.interpretText()
 
     def _stats_panel(self) -> QGroupBox:
         group = QGroupBox("02  声骸词条与档位选择")
@@ -674,6 +783,10 @@ class EchoWindow(QMainWindow):
         scale.addStretch()
         scale.addWidget(QLabel("50 分"))
         layout.addLayout(scale)
+        self.custom_weights_notice = QLabel("当前为自定义权重")
+        self.custom_weights_notice.setObjectName("customWeightsNotice")
+        self.custom_weights_notice.hide()
+        layout.addWidget(self.custom_weights_notice)
         self.details = QTableWidget(0, 5)
         self._style_table(self.details)
         self.details.setHorizontalHeaderLabels(["分类", "词条", "数值", "权重", "贡献分"])
@@ -1160,7 +1273,7 @@ class EchoWindow(QMainWindow):
         self.calculate()
 
     def current_weights(self) -> dict[str, Any]:
-        return {"schema_version": 1, "description": "GUI 用户手动权重",
+        return {"schema_version": 1, "description": WEIGHTS_DESCRIPTION,
                 "sub_stats": {stat_id: box.value() for stat_id, box in self.weight_inputs["sub_stats"].items()},
                 "main_stats": {cost: {stat_id: box.value() for stat_id, box in
                                       self.weight_inputs[f"main_stats_{cost}"].items()}
@@ -1356,6 +1469,9 @@ class EchoWindow(QMainWindow):
         self._update_progress_status(current)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._closing and not self._confirm_unsaved_weights():
+            event.ignore()
+            return
         self._closing = True
         self._strategy_version += 1
         self._strategy_timer.stop()
@@ -1380,49 +1496,150 @@ class EchoWindow(QMainWindow):
         super().closeEvent(event)
 
     def apply_weights(self, weights: dict[str, Any]) -> None:
-        scorer = EchoScorer(self.stats, weights)
-        values = {"sub_stats": scorer.weights["sub_stats"],
+        weights = normalize_weights(self.stats, weights)
+        values = {"sub_stats": weights["sub_stats"],
                   "minor_stats": {cost: next(iter(pool.values()))
-                                  for cost, pool in scorer.minor_weights_by_cost.items()},
-                  **{f"main_stats_{cost}": pool for cost, pool in scorer.main_weights_by_cost.items()}}
-        for category, inputs in self.weight_inputs.items():
-            for stat_id, box in inputs.items():
-                value = values[category][stat_id]
-                if value > box.maximum() or abs(round(value, box.decimals()) - value) > 1e-8:
-                    raise ValueError("GUI 权重支持 0～1000000，最多四位小数；未导入任何权重")
+                                  for cost, pool in weights["minor_stats"].items()},
+                  **{f"main_stats_{cost}": pool for cost, pool in weights["main_stats"].items()}}
+        previous = self.updating
         self.updating = True
         try:
             for category, inputs in self.weight_inputs.items():
                 for stat_id, box in inputs.items():
                     box.setValue(values[category][stat_id])
         finally:
-            self.updating = False
-        self.weight_source_label.setText("自定义权重")
+            self.updating = previous
+        self._refresh_weight_state()
         self.calculate()
 
     def restore_weights(self) -> None:
         self.apply_weights(self.defaults)
-        self.weight_source_label.setText("默认-爱弥斯-企鹅bot")
-        self.statusBar().showMessage("已恢复默认权重（未覆盖任何文件）", 5000)
+        self.statusBar().showMessage("已载入初始默认权重（未保存修改）", 5000)
+
+    def _confirm_unsaved_weights(self) -> bool:
+        self._commit_weight_edits()
+        if not self._weights_dirty:
+            return True
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("未保存的权重修改")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(f"方案“{self.preset_store.current['name']}”有未保存的修改。")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                                  | QMessageBox.StandardButton.Cancel)
+        for button, text in ((QMessageBox.StandardButton.Save, "保存"),
+                             (QMessageBox.StandardButton.Discard, "放弃"),
+                             (QMessageBox.StandardButton.Cancel, "取消")):
+            dialog.button(button).setText(text)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Save)
+        dialog.setEscapeButton(QMessageBox.StandardButton.Cancel)
+        choice = dialog.exec()
+        if choice == QMessageBox.StandardButton.Save:
+            return self.save_weights()
+        return choice == QMessageBox.StandardButton.Discard
+
+    def _select_weight_preset(self, index: int) -> None:
+        if self.updating or index < 0:
+            return
+        preset_id = self.weight_preset_combo.itemData(index)
+        if preset_id == self.preset_store.selected_id:
+            return
+        self._refresh_weight_options()
+        self._refresh_weight_state()
+        if not self._confirm_unsaved_weights():
+            return
+        try:
+            self.preset_store.select(preset_id)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "切换方案失败", str(exc))
+            return
+        self._refresh_weight_options()
+        self.apply_weights(self.preset_store.current["weights"])
+
+    def save_weights(self) -> bool:
+        self._commit_weight_edits()
+        try:
+            self.preset_store.save_current(self.current_weights())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return False
+        self._refresh_weight_state()
+        self.statusBar().showMessage(f"权重方案已保存：{self.preset_store.path}", 5000)
+        return True
+
+    def save_weights_as(self) -> bool:
+        self._commit_weight_edits()
+        name, accepted = QInputDialog.getText(self, "另存为权重方案", "方案名称：",
+                                             text=f"{self.preset_store.current['name']} - 副本")
+        if not accepted:
+            return False
+        try:
+            self.preset_store.add(name, self.current_weights())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "另存为失败", str(exc))
+            return False
+        self._refresh_weight_options()
+        self._refresh_weight_state()
+        self.statusBar().showMessage("已新增并保存权重方案", 5000)
+        return True
+
+    def rename_weights(self) -> None:
+        name, accepted = QInputDialog.getText(self, "重命名权重方案", "方案名称：",
+                                             text=self.preset_store.current["name"])
+        if not accepted:
+            return
+        try:
+            self.preset_store.rename_current(name)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "重命名失败", str(exc))
+            return
+        self._refresh_weight_options()
+        self._refresh_weight_state()
+
+    def delete_weights(self) -> None:
+        if len(self.preset_store.presets) == 1:
+            QMessageBox.warning(self, "不能删除", "至少保留一个权重方案，请先另存为新方案")
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("删除权重方案")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(f"确定删除方案“{self.preset_store.current['name']}”吗？\n"
+                       "该方案及其未保存的修改将被删除，无法撤销。")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.button(QMessageBox.StandardButton.Yes).setText("删除")
+        dialog.button(QMessageBox.StandardButton.No).setText("取消")
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        if dialog.exec() != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.preset_store.delete_current()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "删除失败", str(exc))
+            return
+        self._refresh_weight_options()
+        self.apply_weights(self.preset_store.current["weights"])
 
     def import_weights(self) -> None:
-        name, _ = QFileDialog.getOpenFileName(self, "导入权重预设", "", "JSON (*.json)")
+        name, _ = QFileDialog.getOpenFileName(
+            self, "导入权重预设", str(self.preset_store.path.parent), "JSON (*.json)")
         if not name:
             return
         try:
-            self.apply_weights(load_json(Path(name)))
+            weights = normalize_weights(self.stats, load_json(Path(name)))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "导入失败", str(exc))
             return
-        self.weight_source_label.setText(f"导入-{Path(name).name}")
-        self.statusBar().showMessage("已导入权重；修改立即生效", 5000)
+        if self._confirm_unsaved_weights():
+            self.apply_weights(weights)
+            self.statusBar().showMessage("已导入权重；请保存修改或另存为新方案", 5000)
 
     def export_weights(self) -> None:
-        name, _ = QFileDialog.getSaveFileName(self, "导出权重预设", "my-weights.json", "JSON (*.json)")
+        self._commit_weight_edits()
+        name, _ = QFileDialog.getSaveFileName(
+            self, "导出权重预设", str(self.preset_store.path.with_name("my-weights.json")), "JSON (*.json)")
         if not name:
             return
         try:
-            Path(name).write_text(json.dumps(self.current_weights(), ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+            atomic_write_json(Path(name), self.current_weights())
         except OSError as exc:
             QMessageBox.warning(self, "导出失败", str(exc))
             return

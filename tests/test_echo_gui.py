@@ -5,11 +5,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import copy
 import importlib.util
+import json
 import sys
 import threading
 import time
 import types
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QThread, Qt
@@ -17,10 +20,11 @@ from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QTabWidget, QToolButton, QWidget,
+    QMessageBox, QTabWidget, QToolButton, QWidget,
 )
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
+from src.echo_weight_presets import DEFAULT_PRESET_NAME, WeightPresetStore
 
 
 def strategy_result(reason="fake", *, unavailable=False):
@@ -84,6 +88,19 @@ class EchoGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.presets_path = Path(directory.name) / "weight-presets.json"
+        path_patch = patch("src.echo_gui.weight_presets_path", return_value=self.presets_path)
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+        legacy_patch = patch("src.echo_gui.legacy_weight_presets_path",
+                     return_value=Path(directory.name) / "legacy" / "weight-presets.json")
+        legacy_patch.start()
+        self.addCleanup(legacy_patch.stop)
+        dialog_patch = patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch.start()
+        self.addCleanup(dialog_patch.stop)
         ControlledPlanner.reset()
         module = types.ModuleType("src.echo_strategy")
         module.ActivationPlanner = ControlledPlanner
@@ -173,10 +190,11 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIs(layout.itemAt(2).layout().itemAt(0).widget(), self.window.score_label)
         self.assertIs(layout.itemAt(3).widget(), self.window.progress_status)
         self.assertIs(layout.itemAt(4).widget(), self.window.progress)
-        self.assertIs(layout.itemAt(6).widget(), self.window.details)
-        self.assertIs(layout.itemAt(7).widget(), self.window.cost_divider)
-        self.assertEqual(layout.itemAt(8).widget().text(), "成本估算相关参数")
-        self.assertIs(layout.itemAt(9).layout(), self.window.cost_parameters_layout)
+        self.assertIs(layout.itemAt(6).widget(), self.window.custom_weights_notice)
+        self.assertIs(layout.itemAt(7).widget(), self.window.details)
+        self.assertIs(layout.itemAt(8).widget(), self.window.cost_divider)
+        self.assertEqual(layout.itemAt(9).widget().text(), "成本估算相关参数")
+        self.assertIs(layout.itemAt(10).layout(), self.window.cost_parameters_layout)
 
     def test_cost_parameters_use_five_equal_columns(self):
         grid = self.window.cost_parameters_layout
@@ -270,39 +288,43 @@ class EchoGuiTests(unittest.TestCase):
                     self.app.processEvents()
 
     def test_weight_source_default_import_edit_restore_and_unrelated_changes(self):
-        label = self.window.weight_source_label
-        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
-        layout = self.window.weight_tabs.parentWidget().layout()
-        self.assertEqual(layout.indexOf(label) + 1, layout.indexOf(self.window.weight_tabs))
+        combo = self.window.weight_preset_combo
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
+        self.assertTrue(self.window.custom_weights_notice.isHidden())
         self.window.target.setValue(41)
         self.window.cost.setCurrentIndex(0)
         self.window.strategy_inputs["recovery"].setValue(.75)
-        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
         for inputs in self.window.weight_inputs.values():
             self.window.restore_weights()
             box = next(iter(inputs.values()))
             box.setValue(box.value() + 1)
-            self.assertEqual(label.text(), "自定义权重")
+            self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
+            self.assertFalse(self.window.custom_weights_notice.isHidden())
+        self.window.restore_weights()
         preset = self.window.current_weights()
+        preset["sub_stats"]["crit_rate"] += 1
         with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色权重.json", "")), \
                 patch("src.echo_gui.load_json", return_value=preset):
             self.window.import_weights()
-        self.assertEqual(label.text(), "导入-角色权重.json")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(self.window.current_weights(), preset)
         self.window.clear_sub_stats()
-        self.assertEqual(label.text(), "导入-角色权重.json")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
         with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")):
             self.window.import_weights()
-        self.assertEqual(label.text(), "导入-角色权重.json")
+        self.assertEqual(self.window.current_weights(), preset)
         with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/bad.json", "")), \
                 patch("src.echo_gui.load_json", side_effect=ValueError("bad preset")), \
                 patch("src.echo_gui.QMessageBox.warning"):
             self.window.import_weights()
-        self.assertEqual(label.text(), "导入-角色权重.json")
+        self.assertEqual(self.window.current_weights(), preset)
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         box.setValue(box.value() + 1)
-        self.assertEqual(label.text(), "自定义权重")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
         self.window.restore_weights()
-        self.assertEqual(label.text(), "默认-爱弥斯-企鹅bot")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
+        self.assertTrue(self.window.custom_weights_notice.isHidden())
 
     def test_stats_divider_and_clear_button_style(self):
         layout = self.window.stats_divider.parentWidget().layout()
@@ -458,7 +480,7 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_strategy_results_share_one_row_with_equal_columns(self):
         layout = self.window.score_label.parentWidget().layout()
-        results = layout.itemAt(11).layout()
+        results = layout.itemAt(12).layout()
         self.assertIsInstance(results, QHBoxLayout)
         self.assertEqual(results.count(), 2)
         self.assertIs(results.itemAt(0).widget(), self.window.zero_strategy.parentWidget())
@@ -587,6 +609,347 @@ class EchoGuiTests(unittest.TestCase):
         expected = EchoScorer(self.window.stats, self.window.current_weights()).score(self.window.current_echo())["score"]
         self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
 
+    def add_weight_preset(self, name="队伍甲"):
+        with patch("src.echo_gui.QInputDialog.getText", return_value=(name, True)):
+            self.assertTrue(self.window.save_weights_as())
+        return self.window.preset_store.selected_id
+
+    def test_weight_preset_save_as_save_rename_and_restore_last_selection(self):
+        original = self.window.current_weights()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(3.1256)
+        changed = self.window.current_weights()
+        preset_id = self.add_weight_preset()
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲")
+        self.assertEqual(self.window.preset_store.presets[0]["weights"], original)
+        self.assertFalse(self.window._weights_dirty)
+        with patch("src.echo_gui.QInputDialog.getText", return_value=("角色乙", True)):
+            self.window.rename_weights_action.trigger()
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "角色乙")
+        self.assertEqual(self.window.preset_store.selected_id, preset_id)
+        self.window.weight_inputs["main_stats_4"]["crit_rate"].setValue(.75)
+        self.window.save_weights_button.click()
+        self.assertFalse(self.window._weights_dirty)
+        window = EchoWindow()
+        try:
+            self.assertEqual(window.weight_preset_combo.currentText(), "角色乙")
+            self.assertEqual(window.current_weights(), self.window.current_weights())
+            self.assertEqual(window.current_weights()["sub_stats"], changed["sub_stats"])
+            self.assertTrue(window.custom_weights_notice.isHidden())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_weight_preset_dirty_reverts_and_notice_above_score_table(self):
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        original = box.value()
+        box.setValue(original + 1)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        notice = self.window.custom_weights_notice
+        self.assertEqual(notice.text(), "当前为自定义权重")
+        self.assertFalse(notice.isHidden())
+        self.assertEqual(notice.objectName(), "customWeightsNotice")
+        layout = notice.parentWidget().layout()
+        self.assertEqual(layout.indexOf(notice) + 1, layout.indexOf(self.window.details))
+        self.window.target.setValue(39)
+        self.assertTrue(self.window._weights_dirty)
+        box.setValue(original)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME)
+        self.assertTrue(notice.isHidden())
+        self.assertFalse(self.window._weights_dirty)
+
+    def test_weight_preset_switch_save_discard_cancel_and_persist_selection(self):
+        default_id = self.window.preset_store.selected_id
+        new_id = self.add_weight_preset()
+        combo = self.window.weight_preset_combo
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        for choice in (QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Discard,
+                       QMessageBox.StandardButton.Save):
+            with self.subTest(choice=choice):
+                combo.setCurrentIndex(combo.findData(new_id))
+                saved = self.window.preset_store.current["weights"]["sub_stats"]["crit_rate"]
+                box.setValue(saved + 1)
+                with patch("src.echo_gui.QMessageBox.exec", return_value=choice) as dialog:
+                    combo.setCurrentIndex(combo.findData(default_id))
+                dialog.assert_called_once()
+                if choice == QMessageBox.StandardButton.Cancel:
+                    self.assertEqual(combo.currentData(), new_id)
+                    self.assertEqual(box.value(), saved + 1)
+                    self.assertTrue(self.window._weights_dirty)
+                else:
+                    self.assertEqual(combo.currentData(), default_id)
+                    self.assertFalse(self.window._weights_dirty)
+                    self.assertTrue(self.window.custom_weights_notice.isHidden())
+                store = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
+                self.assertEqual(store.selected_id, combo.currentData())
+                preset = next(item for item in store.presets if item["id"] == new_id)
+                self.assertEqual(preset["weights"]["sub_stats"]["crit_rate"],
+                                 saved + 1 if choice == QMessageBox.StandardButton.Save else saved)
+
+    def test_weight_preset_save_failure_cancels_switch_and_close(self):
+        default_id = self.window.preset_store.selected_id
+        new_id = self.add_weight_preset()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        before = self.window.current_weights()
+        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save), \
+                patch("src.echo_gui.QMessageBox.warning") as warning, \
+                patch.object(self.window.preset_store, "_commit", side_effect=OSError("disk full")):
+            self.window.weight_preset_combo.setCurrentIndex(
+                self.window.weight_preset_combo.findData(default_id))
+            self.assertEqual(self.window.weight_preset_combo.currentData(), new_id)
+            self.assertFalse(self.window.close())
+            self.assertFalse(self.window._closing)
+            self.assertEqual(warning.call_count, 2)
+        self.assertEqual(self.window.current_weights(), before)
+        self.assertTrue(self.window._weights_dirty)
+
+    def test_weight_preset_selection_write_failure_keeps_dirty_input(self):
+        default_id = self.window.preset_store.selected_id
+        new_id = self.add_weight_preset()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch.object(self.window.preset_store, "_commit", side_effect=OSError("disk full")), \
+                patch("src.echo_gui.QMessageBox.warning") as warning:
+            self.window.weight_preset_combo.setCurrentIndex(
+                self.window.weight_preset_combo.findData(default_id))
+        warning.assert_called_once()
+        self.assertEqual(self.window.weight_preset_combo.currentData(), new_id)
+        self.assertEqual(self.window.weight_inputs["sub_stats"]["crit_rate"].value(), 7)
+        self.assertTrue(self.window._weights_dirty)
+
+    def test_weight_preset_close_choices_and_dialog_labels(self):
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+
+        def cancel_with_labels(dialog):
+            self.assertEqual([dialog.button(button).text() for button in
+                              (QMessageBox.StandardButton.Save, QMessageBox.StandardButton.Discard,
+                               QMessageBox.StandardButton.Cancel)], ["保存", "放弃", "取消"])
+            self.assertEqual(dialog.defaultButton(), dialog.button(QMessageBox.StandardButton.Save))
+            return QMessageBox.StandardButton.Cancel
+
+        with patch("src.echo_gui.QMessageBox.exec", cancel_with_labels):
+            self.assertFalse(self.window.close())
+        self.assertFalse(self.window._closing)
+        self.assertTrue(self.window._weights_dirty)
+        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save):
+            self.assertTrue(self.window.close())
+        store = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
+        self.assertEqual(store.current["weights"]["sub_stats"]["crit_rate"], 7)
+
+    def test_weight_preset_close_discard_does_not_save(self):
+        original = self.window.current_weights()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        self.assertTrue(self.window.close())
+        store = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
+        self.assertEqual(store.current["weights"], original)
+
+    def test_weight_preset_pending_keyboard_input_is_saved(self):
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        original = box.value()
+        box.selectAll()
+        QTest.keyClicks(box, "3.1256")
+        self.assertEqual(box.value(), original)
+        self.window.save_weights_button.click()
+        self.assertEqual(box.value(), 3.1256)
+        self.assertFalse(self.window._weights_dirty)
+        self.assertEqual(self.window.preset_store.current["weights"]["sub_stats"]["crit_rate"], 3.1256)
+
+    def test_weight_preset_rename_preserves_unsaved_edits(self):
+        saved = self.window.current_weights()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QInputDialog.getText", return_value=("新名字", True)):
+            self.window.rename_weights()
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "新名字 *")
+        self.assertEqual(self.window.preset_store.current["weights"], saved)
+        self.assertEqual(self.window.weight_inputs["sub_stats"]["crit_rate"].value(), 7)
+
+    def test_weight_preset_cancel_duplicate_and_empty_name_do_not_change_store(self):
+        self.add_weight_preset()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        before = self.presets_path.read_bytes()
+        for name, accepted in (("取消", False), (" ", True), (DEFAULT_PRESET_NAME, True)):
+            with self.subTest(name=name), \
+                    patch("src.echo_gui.QInputDialog.getText", return_value=(name, accepted)), \
+                    patch("src.echo_gui.QMessageBox.warning"):
+                self.assertFalse(self.window.save_weights_as())
+                self.window.rename_weights()
+            self.assertEqual(self.presets_path.read_bytes(), before)
+            self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲 *")
+
+    def test_weight_preset_delete_confirmation_and_protect_last(self):
+        self.assertFalse(self.window.delete_weights_action.isEnabled())
+        with patch("src.echo_gui.QMessageBox.warning") as warning:
+            self.window.delete_weights()
+        warning.assert_called_once()
+        self.add_weight_preset()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
+            self.window.delete_weights()
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲 *")
+        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
+            self.window.delete_weights_action.trigger()
+        self.assertEqual(self.window.weight_preset_combo.count(), 1)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME)
+        self.assertFalse(self.window._weights_dirty)
+        self.assertTrue(self.window.custom_weights_notice.isHidden())
+        self.assertFalse(self.window.delete_weights_action.isEnabled())
+
+    def test_weight_preset_nonzero_colors_and_clear_each_page_only(self):
+        self.window.show()
+        self.app.processEvents()
+        for index, (category, inputs) in enumerate(self.window.weight_inputs.items()):
+            with self.subTest(category=category):
+                self.window.weight_tabs.setCurrentIndex(index)
+                first = next(iter(inputs.values()))
+                first.setValue(1)
+                self.app.processEvents()
+                self.assertTrue(first.property("nonzero"))
+                self.assertEqual(first.palette().text().color().name(), "#b45309")
+                other_values = {name: {stat: box.value() for stat, box in boxes.items()}
+                                for name, boxes in self.window.weight_inputs.items() if name != category}
+                button = self.window.clear_weight_buttons[category]
+                page_layout = button.parentWidget().layout()
+                footer = page_layout.itemAt(2).layout()
+                self.assertIsNotNone(footer.itemAt(0).spacerItem())
+                self.assertIs(footer.itemAt(1).widget(), button)
+                self.assertEqual(button.geometry().right(), page_layout.contentsRect().right())
+                self.assertLessEqual(page_layout.contentsRect().bottom() - button.geometry().bottom(), 2)
+                version = self.window._strategy_version
+                button.click()
+                self.assertEqual(self.window._strategy_version, version + 1)
+                self.assertTrue(all(box.value() == 0 and not box.property("nonzero") for box in inputs.values()))
+                self.assertEqual(first.palette().text().color().name(), "#243247")
+                self.assertEqual(other_values, {name: {stat: box.value() for stat, box in boxes.items()}
+                                                for name, boxes in self.window.weight_inputs.items()
+                                                if name != category})
+        self.assertEqual(self.window.score_label.text(), "0 分")
+        self.assertTrue(self.window._weights_dirty)
+
+    def test_weight_preset_switch_refreshes_score_and_background_strategy(self):
+        default_id = self.window.preset_store.selected_id
+        self.choose_example()
+        original_score = self.window.score_label.text()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        self.add_weight_preset()
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        old_planner = ControlledPlanner.instances[-1]
+        self.assertNotEqual(self.window.score_label.text(), original_score)
+        version = self.window._strategy_version
+        self.window.weight_preset_combo.setCurrentIndex(self.window.weight_preset_combo.findData(default_id))
+        self.assertEqual(self.window.score_label.text(), original_score)
+        self.assertEqual(self.window._strategy_version, version + 1)
+        self.assertEqual(self.window.current_strategy.text(), "—")
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        self.assertIsNot(ControlledPlanner.instances[-1], old_planner)
+        self.assertEqual(ControlledPlanner.instances[-1].scorer.weights["sub_stats"],
+                         self.window.current_weights()["sub_stats"])
+
+    def test_weight_preset_import_cancel_preserves_draft_export_remains_compatible(self):
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        draft = self.window.current_weights()
+        imported = copy.deepcopy(draft)
+        imported["sub_stats"]["crit_rate"] = 9
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色.json", "")), \
+                patch("src.echo_gui.load_json", return_value=imported), \
+                patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Cancel):
+            self.window.import_weights()
+        self.assertEqual(self.window.current_weights(), draft)
+        destination = self.presets_path.with_name("export.json")
+        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
+            self.window.export_weights()
+        exported = load_json(destination)
+        self.assertEqual(exported, draft)
+        self.assertTrue(self.window._weights_dirty)
+        EchoScorer(self.window.stats, exported)
+
+    def test_weight_preset_failed_export_preserves_existing_file(self):
+        destination = self.presets_path.with_name("export.json")
+        original = self.window.current_weights()
+        destination.write_text(json.dumps(original), encoding="utf-8")
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")), \
+                patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")), \
+                patch("src.echo_gui.QMessageBox.warning") as warning:
+            self.window.export_weights()
+        warning.assert_called_once()
+        self.assertEqual(load_json(destination), original)
+        self.assertTrue(self.window._weights_dirty)
+
+    def test_weight_preset_initial_write_failure_still_allows_scoring_and_retry(self):
+        path = self.presets_path.with_name("first-run.json")
+        with patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")):
+            window = EchoWindow(presets_path=path)
+        try:
+            self.assertIsNotNone(window._score_result)
+            self.assertEqual(window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+            self.assertIn("尚未保存", window.statusBar().currentMessage())
+            self.assertFalse(window.preset_store.persisted)
+            self.assertTrue(window.save_weights())
+            self.assertFalse(window._weights_dirty)
+            self.assertTrue(path.exists())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_weight_preset_default_location_migrates_existing_user_library(self):
+        legacy = self.presets_path.parent / "legacy" / "weight-presets.json"
+        source = WeightPresetStore(legacy, self.window.stats, self.window.defaults)
+        weights = self.window.current_weights()
+        weights["sub_stats"]["crit_rate"] = 7
+        source.add("已有方案", weights)
+        original = legacy.read_bytes()
+        destination = self.presets_path.with_name("portable-presets.json")
+        with patch("src.echo_gui.weight_presets_path", return_value=destination):
+            window = EchoWindow()
+        try:
+            self.assertEqual(window.preset_store.path, destination)
+            self.assertEqual(window.preset_store.migrated_from, legacy)
+            self.assertEqual(window.weight_preset_combo.currentText(), "已有方案")
+            self.assertEqual(window.current_weights(), weights)
+            self.assertFalse(window._weights_dirty)
+            self.assertIn(str(destination), window.statusBar().currentMessage())
+            window.weight_inputs["sub_stats"]["crit_rate"].setValue(8)
+            self.assertTrue(window.save_weights())
+            self.assertEqual(legacy.read_bytes(), original)
+            self.assertEqual(window.preset_store.current["weights"]["sub_stats"]["crit_rate"], 8)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_weight_preset_explicit_location_does_not_read_legacy_user_library(self):
+        destination = self.presets_path.with_name("explicit.json")
+        with patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+            window = EchoWindow(presets_path=destination)
+        try:
+            legacy.assert_not_called()
+            self.assertIsNone(window.preset_store.migrated_from)
+            self.assertEqual(window.preset_store.path, destination)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_weight_preset_existing_local_library_does_not_query_user_directory(self):
+        with patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+            window = EchoWindow()
+        try:
+            legacy.assert_not_called()
+            self.assertIsNone(window.preset_store.migrated_from)
+            self.assertEqual(window.preset_store.path, self.presets_path)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_weight_preset_import_export_dialogs_default_to_local_directory(self):
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")) as open_dialog:
+            self.window.import_weights()
+        self.assertEqual(open_dialog.call_args.args[2], str(self.presets_path.parent))
+        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=("", "")) as save_dialog:
+            self.window.export_weights()
+        self.assertEqual(save_dialog.call_args.args[2], str(self.presets_path.with_name("my-weights.json")))
+
     def test_weight_tab_order_and_layout(self):
         tabs = self.window.findChild(QTabWidget)
         self.assertEqual([tabs.tabText(i) for i in range(tabs.count())],
@@ -594,7 +957,8 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(tabs.currentIndex(), 0)
         for tab_index, category, pairs in [(0, "sub_stats", 2), (1, "main_stats_1", 2),
                                            (2, "main_stats_3", 2), (3, "main_stats_4", 2)]:
-            table = tabs.widget(tab_index)
+            table = self.window.weight_tables[category]
+            self.assertIs(table.parentWidget(), tabs.widget(tab_index))
             inputs = self.window.weight_inputs[category]
             self.assertEqual(table.columnCount(), pairs * 2)
             self.assertEqual(table.rowCount(), (len(inputs) + pairs - 1) // pairs)
@@ -636,7 +1000,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.target.value(), 31)
 
     def test_minor_weights_tab_roundtrip_restore_and_old_preset(self):
-        table = self.window.weight_tabs.widget(4)
+        table = self.window.weight_tables["minor_stats"]
         self.assertEqual(table.rowCount(), 2)
         self.assertEqual(table.columnCount(), 4)
         labels = [table.item(0, 0).text(), table.item(0, 2).text(), table.item(1, 0).text()]
@@ -1025,6 +1389,21 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path_patch = patch("src.echo_gui.weight_presets_path",
+                           return_value=Path(directory.name) / "weight-presets.json")
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+        legacy_patch = patch("src.echo_gui.legacy_weight_presets_path",
+                     return_value=Path(directory.name) / "legacy" / "weight-presets.json")
+        legacy_patch.start()
+        self.addCleanup(legacy_patch.stop)
+        dialog_patch = patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch.start()
+        self.addCleanup(dialog_patch.stop)
 
     def wait_for_strategy(self, window, timeout=10):
         deadline = time.monotonic() + timeout
