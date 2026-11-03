@@ -12,11 +12,11 @@ from threading import Event
 from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
+from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
+    QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStyledItemDelegate, QTabWidget, QToolButton,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStyledItemDelegate, QTabBar, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -440,6 +440,7 @@ class EchoWindow(QMainWindow):
             layout.addWidget(section)
         scroll.setWidget(canvas)
         self.setCentralWidget(scroll)
+        self._configure_interactions()
         self._refresh_main()
         self.updating = False
         self._refresh_weight_state()
@@ -450,6 +451,54 @@ class EchoWindow(QMainWindow):
                 f"{self.preset_store.path} · {self.preset_store.initial_save_error}")
         elif self.preset_store.migrated_from is not None:
             self.statusBar().showMessage(f"已将旧版权重方案迁移至：{self.preset_store.path}", 10000)
+
+    def _configure_interactions(self) -> None:
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, QLabel):
+                widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                               | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+                widget.setCursor(Qt.CursorShape.IBeamCursor)
+            elif isinstance(widget, (QAbstractButton, QComboBox)):
+                widget.setCursor(Qt.CursorShape.PointingHandCursor if widget.isEnabled()
+                                 else Qt.CursorShape.ArrowCursor)
+                widget.installEventFilter(self)
+        for tabs in (self.weight_tabs, self.reconstruction_tabs):
+            tabs.tabBar().setMouseTracking(True)
+            tabs.tabBar().installEventFilter(self)
+        for table in (self.reconstruction_plans_table, self.reconstruction_budget_table):
+            table.setMouseTracking(True)
+            table.viewport().installEventFilter(self)
+
+    def _update_item_cursor(self, widget: QWidget, position: QPoint | None = None) -> None:
+        if position is None:
+            position = widget.mapFromGlobal(QCursor.pos())
+        active = widget.isEnabled() and widget.rect().contains(position)
+        if isinstance(widget, QTabBar):
+            tab = widget.tabAt(position)
+            active = active and tab >= 0 and widget.isTabEnabled(tab)
+        else:
+            table = widget.parentWidget()
+            if not isinstance(table, QTableWidget):
+                return
+            index = table.indexAt(position)
+            active = (active and index.isValid()
+                      and bool(index.flags() & Qt.ItemFlag.ItemIsEnabled))
+        widget.setCursor(Qt.CursorShape.PointingHandCursor if active else Qt.CursorShape.ArrowCursor)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if isinstance(watched, (QAbstractButton, QComboBox)):
+            if event.type() == QEvent.Type.EnabledChange:
+                watched.setCursor(Qt.CursorShape.PointingHandCursor if watched.isEnabled()
+                                  else Qt.CursorShape.ArrowCursor)
+        elif isinstance(watched, QWidget) and event.type() in (
+                QEvent.Type.Enter, QEvent.Type.MouseMove, QEvent.Type.Leave,
+                QEvent.Type.EnabledChange, QEvent.Type.Paint):
+            if event.type() == QEvent.Type.Leave:
+                watched.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self._update_item_cursor(watched, event.position().toPoint()
+                                         if isinstance(event, QMouseEvent) else None)
+        return super().eventFilter(watched, event)
 
     @staticmethod
     def _divider() -> QFrame:

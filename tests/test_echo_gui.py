@@ -16,11 +16,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QThread, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QKeySequence, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QMessageBox, QStyledItemDelegate, QTabWidget, QToolButton, QWidget,
+    QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QMessageBox, QStyledItemDelegate, QTableWidgetItem, QTabWidget, QToolButton, QWidget,
 )
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
@@ -135,6 +135,111 @@ class EchoGuiTests(unittest.TestCase):
             tier = self.window.sub_tier_inputs[stat_id]
             tier.setCurrentIndex(tier.count() - 1)
         self.window.main_stat.setCurrentIndex(self.window.main_stat.findData("crit_rate"))
+
+    def test_interactive_control_cursors_follow_enabled_state(self):
+        for widget in self.window.findChildren(QWidget):
+            if isinstance(widget, (QAbstractButton, QComboBox)):
+                with self.subTest(control=widget.objectName() or type(widget).__name__):
+                    expected = (Qt.CursorShape.PointingHandCursor if widget.isEnabled()
+                                else Qt.CursorShape.ArrowCursor)
+                    self.assertEqual(widget.cursor().shape(), expected)
+        for widget in (self.window.clear_sub_stats_button, self.window.cost,
+                       self.window.theoretical_max_help):
+            widget.setEnabled(False)
+            self.assertEqual(widget.cursor().shape(), Qt.CursorShape.ArrowCursor)
+            widget.setEnabled(True)
+            self.assertEqual(widget.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+        self.assertEqual(self.window.target.lineEdit().cursor().shape(), Qt.CursorShape.IBeamCursor)
+        self.assertEqual(self.window.centralWidget().widget().cursor().shape(), Qt.CursorShape.ArrowCursor)
+
+    def test_display_labels_are_selectable_but_not_editable(self):
+        for label in self.window.findChildren(QLabel):
+            with self.subTest(text=label.text()):
+                flags = label.textInteractionFlags()
+                self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByKeyboard)
+                self.assertFalse(flags & Qt.TextInteractionFlag.TextEditable)
+                self.assertEqual(label.cursor().shape(), Qt.CursorShape.IBeamCursor)
+
+    def test_display_label_mouse_selection_and_copy(self):
+        self.window._strategy_timer.stop()
+        for index in (0, 2, 3):
+            self.window.sections[index].toggle_button.click()
+        self.window.show()
+        self.app.processEvents()
+        label = self.window.main_value
+        original = label.text()
+        start = QPoint(0, label.height() // 2)
+        end = QPoint(label.width() - 1, start.y())
+        QTest.mousePress(label, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(label, end)
+        QTest.mouseRelease(label, Qt.MouseButton.LeftButton, pos=end)
+        self.assertTrue(label.hasSelectedText())
+        self.assertEqual(label.selectedText(), original)
+        clipboard = self.app.clipboard()
+        previous = clipboard.text()
+        self.addCleanup(clipboard.setText, previous)
+        QTest.keySequence(label, QKeySequence(QKeySequence.StandardKey.Copy))
+        self.assertEqual(clipboard.text(), original)
+        QTest.keyClicks(label, "not editable")
+        self.assertEqual(label.text(), original)
+
+    def test_tab_cursors_only_on_enabled_tabs(self):
+        self.window._strategy_timer.stop()
+        self.window.show()
+        self.app.processEvents()
+        for tabs in (self.window.weight_tabs, self.window.reconstruction_tabs):
+            with self.subTest(tabs=tabs):
+                bar = tabs.tabBar()
+                self.window.centralWidget().ensureWidgetVisible(bar)
+                self.app.processEvents()
+                position = bar.tabRect(0).center()
+                QTest.mouseMove(bar, position)
+                self.assertEqual(bar.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+                tabs.setTabEnabled(0, False)
+                self.app.processEvents()
+                QTest.mouseMove(bar, position)
+                self.assertEqual(bar.cursor().shape(), Qt.CursorShape.ArrowCursor)
+                tabs.setTabEnabled(0, True)
+                QTest.mouseMove(bar, bar.tabRect(1).center())
+                self.assertEqual(bar.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+                QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(1).center())
+                self.assertEqual(tabs.currentIndex(), 1)
+                self.app.sendEvent(bar, QEvent(QEvent.Type.Leave))
+                self.assertEqual(bar.cursor().shape(), Qt.CursorShape.ArrowCursor)
+
+    def test_reconstruction_table_cursors_only_on_enabled_items(self):
+        self.window._strategy_timer.stop()
+        for section in self.window.sections[:3]:
+            section.toggle_button.click()
+        self.window.show()
+        for tab, table in enumerate((self.window.reconstruction_plans_table,
+                                     self.window.reconstruction_budget_table)):
+            with self.subTest(tab=tab):
+                self.window.reconstruction_tabs.setCurrentIndex(tab)
+                table.setRowCount(1)
+                table.setItem(0, 0, QTableWidgetItem("test"))
+                self.window.centralWidget().ensureWidgetVisible(table)
+                self.app.processEvents()
+                viewport = table.viewport()
+                position = table.visualItemRect(table.item(0, 0)).center()
+                QTest.mouseMove(viewport, position)
+                self.assertEqual(viewport.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+                blank = QPoint(position.x(), viewport.height() - 2)
+                self.assertFalse(table.indexAt(blank).isValid())
+                QTest.mouseMove(viewport, blank)
+                self.assertEqual(viewport.cursor().shape(), Qt.CursorShape.ArrowCursor)
+                table.setEnabled(False)
+                QTest.mouseMove(viewport, position)
+                self.assertEqual(viewport.cursor().shape(), Qt.CursorShape.ArrowCursor)
+                table.setEnabled(True)
+                QTest.mouseMove(viewport, position)
+                self.assertEqual(viewport.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+                QTest.mouseClick(viewport, Qt.MouseButton.LeftButton, pos=position)
+                self.assertEqual(len(table.selectionModel().selectedRows()), 1)
+                table.setRowCount(0)
+                self.app.processEvents()
+                self.assertEqual(viewport.cursor().shape(), Qt.CursorShape.ArrowCursor)
 
     def test_example_live_score_and_target(self):
         self.choose_example()
