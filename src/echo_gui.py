@@ -105,12 +105,26 @@ QStatusBar { background: #f4f6fa; color: #65758b; }
 
 
 def weight_presets_path() -> Path:
-    """源码保存到项目根目录，打包后保存到 EXE 旁，不使用启动工作目录或解包目录。"""
+    """源码保存到项目根目录，打包后保存到 EXE 或 macOS .app 旁。"""
     if getattr(sys, "frozen", False):
         directory = Path(sys.executable).resolve().parent
+        if (sys.platform == "darwin" and directory.name == "MacOS"
+                and directory.parent.name == "Contents"
+                and directory.parent.parent.suffix == ".app"):
+            directory = directory.parent.parent.parent
     else:
         directory = Path(__file__).resolve().parent.parent
     return directory / "weight-presets.json"
+
+
+def initial_weight_presets_path() -> Path:
+    """macOS 打包版使用只读模板初始化，其他版本沿用旧版用户库迁移。"""
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        template = DEFAULT_WEIGHTS.parent.parent / "weight-presets.json"
+        if not template.is_file():
+            raise FileNotFoundError(f"应用内置权重方案库不存在：{template}")
+        return template
+    return legacy_weight_presets_path()
 
 
 def legacy_weight_presets_path() -> Path:
@@ -356,7 +370,7 @@ class EchoWindow(QMainWindow):
         local_presets = presets_path if presets_path is not None else weight_presets_path()
         self.preset_store = WeightPresetStore(
             local_presets, self.stats, self.defaults,
-            legacy_path=legacy_weight_presets_path()
+            legacy_path=initial_weight_presets_path()
             if presets_path is None and not local_presets.exists() else None)
         self._weights_dirty = False
         self.updating = True

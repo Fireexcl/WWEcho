@@ -90,7 +90,7 @@ class WeightPresetStore:
             self._revision = contents
         else:
             if legacy_path is not None and legacy_path.is_file():
-                # 旧库仅作为只读迁移源，目标写入失败也不回退到用户目录。
+                # 旧库或内置模板仅作为只读源，目标写入失败不回退到其他目录。
                 self._document = self._validate_document(json.loads(legacy_path.read_bytes()))
                 self.migrated_from = legacy_path
             else:
