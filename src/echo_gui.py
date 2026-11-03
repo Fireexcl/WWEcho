@@ -73,7 +73,8 @@ QPushButton:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
 QComboBox, QSpinBox, QDoubleSpinBox { background: white; border: 1px solid #ced9e7;
                                    border-radius: 7px; padding: 6px 8px; min-height: 22px;
                                    selection-background-color: #2563eb; }
-QDoubleSpinBox[weightEditor="true"][nonzero="true"] {
+QDoubleSpinBox[weightEditor="true"][nonzero="true"],
+QComboBox#weightPreset[customWeights="true"] {
     color: #b45309; background: #fff8eb; font-weight: 600; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e8effc;
                             selection-color: #1d4ed8; padding: 4px; }
@@ -618,8 +619,14 @@ class EchoWindow(QMainWindow):
     def _refresh_weight_state(self) -> None:
         preset = self.preset_store.current
         self._weights_dirty = not self.preset_store.persisted or self.current_weights() != preset["weights"]
-        index = self.weight_preset_combo.findData(preset["id"])
-        self.weight_preset_combo.setItemText(index, "自定义权重" if self._weights_dirty else preset["name"])
+        combo = self.weight_preset_combo
+        index = combo.findData(preset["id"])
+        combo.setItemText(index, "自定义权重" if self._weights_dirty else preset["name"])
+        if combo.property("customWeights") != self._weights_dirty:
+            combo.setProperty("customWeights", self._weights_dirty)
+            combo.style().unpolish(combo)
+            combo.style().polish(combo)
+            combo.update()
         self.custom_weights_notice.setVisible(self._weights_dirty)
         self.delete_weights_action.setEnabled(len(self.preset_store.presets) > 1)
         for inputs in self.weight_inputs.values():

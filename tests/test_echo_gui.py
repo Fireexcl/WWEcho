@@ -662,7 +662,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertTrue(notice.isHidden())
         self.assertFalse(self.window._weights_dirty)
 
-    def test_weight_preset_combo_light_blue_for_saved_and_custom_weights(self):
+    def test_weight_preset_combo_blue_for_saved_and_orange_for_custom_weights(self):
         self.window.show()
         self.app.processEvents()
         combo = self.window.weight_preset_combo
@@ -671,17 +671,28 @@ class EchoGuiTests(unittest.TestCase):
         saved = self.window.preset_store.current
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         original = box.value()
-        for value, text in ((original, saved["name"]), (original + 1, "自定义权重"),
-                            (original, saved["name"])):
+        for value, text, background, foreground in (
+            (original, saved["name"], "#e8efff", "#2456a6"),
+            (original + 1, "自定义权重", "#fff8eb", "#b45309"),
+            (original, saved["name"], "#e8efff", "#2456a6")):
             with self.subTest(text=text):
                 box.setValue(value)
                 self.app.processEvents()
                 self.assertEqual(combo.currentText(), text)
-                self.assertEqual(combo.palette().button().color().name(), "#e8efff")
-                self.assertEqual(combo.palette().buttonText().color().name(), "#2456a6")
+            self.assertEqual(combo.palette().button().color().name(), background)
+            self.assertEqual(combo.palette().buttonText().color().name(), foreground)
+            if self.window._weights_dirty:
+                self.assertEqual(combo.palette().button().color(), box.palette().base().color())
+                self.assertEqual(combo.palette().buttonText().color(), box.palette().text().color())
                 self.assertEqual(combo.currentData(), selected_id)
                 self.assertEqual(self.window.preset_store.current, saved)
         self.assertEqual(self.window.cost.palette().button().color().name(), "#ffffff")
+        box.setValue(original + 1)
+        self.assertEqual(combo.palette().button().color().name(), "#fff8eb")
+        self.assertTrue(self.window.save_weights())
+        self.assertEqual(combo.currentText(), saved["name"])
+        self.assertEqual(combo.palette().button().color().name(), "#e8efff")
+        self.assertEqual(combo.palette().buttonText().color().name(), "#2456a6")
 
     def test_weight_preset_custom_label_keeps_original_name_for_save_and_confirmation(self):
         self.add_weight_preset("角色方案")
