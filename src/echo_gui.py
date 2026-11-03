@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
-from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, atomic_write_json, normalize_weights
+from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, normalize_weights
 
 
 STYLE = """
@@ -1620,11 +1620,23 @@ class EchoWindow(QMainWindow):
 
     def import_weights(self) -> None:
         name, _ = QFileDialog.getOpenFileName(
-            self, "导入权重预设", str(self.preset_store.path.parent), "JSON (*.json)")
+            self, "导入权重方案库（按 ID 去重追加）", str(self.preset_store.path.parent), "JSON (*.json)")
         if not name:
             return
         try:
-            weights = normalize_weights(self.stats, load_json(Path(name)))
+            data = load_json(Path(name))
+            if "presets" in data:
+                # 合并不覆盖当前方案；无须放弃当前草稿，也不切换到导入库的 selected_id。
+                self._commit_weight_edits()
+                summary = self.preset_store.import_presets(data)
+                self._refresh_weight_options()
+                self._refresh_weight_state()
+                self.statusBar().showMessage(
+                    f"方案库导入完成：新增 {summary['added']} 个，跳过重复 ID {summary['skipped']} 个，"
+                    f"同名自动重命名 {summary['renamed']} 个；当前方案与编辑内容保持不变", 10000)
+                return
+            # 兼容旧版单套权重导入；保留原来的草稿与保存/另存为流程。
+            weights = normalize_weights(self.stats, data)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "导入失败", str(exc))
             return
@@ -1635,15 +1647,19 @@ class EchoWindow(QMainWindow):
     def export_weights(self) -> None:
         self._commit_weight_edits()
         name, _ = QFileDialog.getSaveFileName(
-            self, "导出权重预设", str(self.preset_store.path.with_name("my-weights.json")), "JSON (*.json)")
+            self, "导出全部权重方案", str(self.preset_store.path.with_name("weight-presets-export.json")), "JSON (*.json)")
         if not name:
             return
         try:
-            atomic_write_json(Path(name), self.current_weights())
-        except OSError as exc:
+            saved_locally = self.preset_store.export_presets(Path(name), current_weights=self.current_weights())
+        except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "导出失败", str(exc))
             return
-        self.statusBar().showMessage("权重已导出；可再次导入或供命令行评分使用", 5000)
+        if saved_locally:
+            self._refresh_weight_state()
+        self.statusBar().showMessage(
+            f"已导出全部 {len(self.preset_store.presets)} 个权重方案（含当前编辑值）；"
+            + ("已保存到本地方案库" if saved_locally else "本地未保存修改的状态不变"), 10000)
 
 
 def main() -> int:

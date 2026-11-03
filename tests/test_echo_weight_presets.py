@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from uuid import RFC_4122, UUID
 
 from PySide6.QtCore import QLockFile
 
@@ -164,6 +165,162 @@ class WeightPresetStoreTests(unittest.TestCase):
     def test_default_name_is_editable_like_other_presets(self):
         self.store.rename_current("我的默认")
         self.assertEqual(self.reopen().current["name"], "我的默认")
+
+    def test_ids_are_random_uuid4_hex_and_stable_across_save_and_rename(self):
+        first_id = self.store.selected_id
+        self.store.add("副本", self.store.current["weights"])
+        second_id = self.store.selected_id
+        self.assertNotEqual(first_id, second_id)
+        for value in (first_id, second_id):
+            parsed = UUID(hex=value)
+            self.assertEqual(value, parsed.hex)
+            self.assertEqual(len(value), 32)
+            self.assertEqual(parsed.version, 4)
+            self.assertEqual(parsed.variant, RFC_4122)
+        self.store.save_current(self.store.current["weights"])
+        self.store.rename_current("改名字")
+        self.assertEqual(self.store.selected_id, second_id)
+        self.assertEqual(self.reopen().selected_id, second_id)
+
+    def import_document(self, presets):
+        return {"schema_version": 1, "selected_id": presets[0]["id"] if presets else "", "presets": presets}
+
+    def foreign_preset(self, preset_id="foreign-id", name="外部方案"):
+        return {"id": preset_id, "name": name, "weights": self.store.current["weights"]}
+
+    def test_import_appends_only_new_ids_and_preserves_local_values_and_selection(self):
+        original = self.store.current
+        duplicate = copy.deepcopy(original)
+        duplicate["name"] = "外部修改的名称"
+        duplicate["weights"]["sub_stats"]["crit_rate"] = 999
+        incoming = self.foreign_preset()
+        document = self.import_document([duplicate, incoming])
+        result = self.store.import_presets(document)
+        self.assertEqual(result, {"added": 1, "skipped": 1, "renamed": 0})
+        self.assertEqual(self.store.selected_id, original["id"])
+        self.assertEqual(self.store.presets, [original, incoming])
+        self.assertEqual(self.reopen().presets, [original, incoming])
+        self.assertEqual(document["presets"][1], incoming)
+
+    def test_import_deduplicates_inside_file_first_wins_and_reimport_is_noop(self):
+        first = self.foreign_preset()
+        duplicate = copy.deepcopy(first)
+        duplicate["weights"]["sub_stats"]["crit_rate"] = 999
+        document = self.import_document([first, duplicate])
+        self.assertEqual(self.store.import_presets(document), {"added": 1, "skipped": 1, "renamed": 0})
+        self.assertEqual(self.store.presets[-1], first)
+        before = self.path.read_bytes()
+        with patch.object(self.store, "_commit") as commit:
+            self.assertEqual(self.store.import_presets(document), {"added": 0, "skipped": 2, "renamed": 0})
+        commit.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_import_same_name_different_id_renames_without_changing_id(self):
+        name = self.store.current["name"]
+        incoming = [self.foreign_preset("foreign-a", name), self.foreign_preset("foreign-b", name)]
+        self.assertEqual(self.store.import_presets(self.import_document(incoming)),
+                         {"added": 2, "skipped": 0, "renamed": 2})
+        self.assertEqual([preset["name"] for preset in self.store.presets],
+                         [name, name + "（导入 1）", name + "（导入 2）"])
+        self.assertEqual([preset["id"] for preset in self.store.presets[1:]], ["foreign-a", "foreign-b"])
+        self.assertEqual(self.reopen().presets, self.store.presets)
+
+    def test_import_name_collision_is_case_insensitive_and_respects_name_limit(self):
+        long_name = "名" * 80
+        self.store.rename_current(long_name)
+        self.store.add("Team", self.store.current["weights"])
+        incoming = [self.foreign_preset("long", long_name), self.foreign_preset("case", "team")]
+        self.store.import_presets(self.import_document(incoming))
+        imported = self.store.presets[-2:]
+        self.assertEqual(len(imported[0]["name"]), 80)
+        self.assertTrue(imported[0]["name"].endswith("（导入 1）"))
+        self.assertEqual(imported[1]["name"], "team（导入 1）")
+        self.assertEqual(self.reopen().presets, self.store.presets)
+
+    def test_import_ignores_foreign_selection_and_accepts_partial_library(self):
+        original_id = self.store.selected_id
+        result = self.store.import_presets({"schema_version": 1, "presets": [self.foreign_preset()]})
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(self.store.selected_id, original_id)
+        with patch.object(self.store, "_commit") as commit:
+            self.assertEqual(self.store.import_presets({"schema_version": 1, "presets": []}),
+                             {"added": 0, "skipped": 0, "renamed": 0})
+        commit.assert_not_called()
+
+    def test_import_invalid_new_preset_is_atomic_and_does_not_change_disk_or_memory(self):
+        original = self.store.presets
+        before = self.path.read_bytes()
+        valid = self.foreign_preset()
+        bad_weights = copy.deepcopy(valid)
+        bad_weights["id"] = "bad-weights"
+        bad_weights["weights"]["sub_stats"]["crit_rate"] = -1
+        invalid = [None, {}, {"schema_version": 99, "presets": []},
+                   {"schema_version": 1, "presets": {}},
+                   self.import_document([valid, {"id": "", "name": "x", "weights": valid["weights"]}]),
+                   self.import_document([valid, {"id": "no-name", "weights": valid["weights"]}]),
+                   self.import_document([valid, bad_weights]),
+                   self.import_document([valid, {"id": "no-weights", "name": "x"}])]
+        for document in invalid:
+            with self.subTest(document=document), self.assertRaises(ValueError):
+                self.store.import_presets(document)
+            self.assertEqual(self.store.presets, original)
+            self.assertEqual(self.path.read_bytes(), before)
+
+    def test_import_write_failure_and_external_revision_keep_existing_data(self):
+        document = self.import_document([self.foreign_preset()])
+        original = self.store.presets
+        before = self.path.read_bytes()
+        with patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.store.import_presets(document)
+        self.assertEqual(self.store.presets, original)
+        self.assertEqual(self.path.read_bytes(), before)
+        second = self.reopen()
+        second.add("其他窗口", second.current["weights"])
+        updated = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "其他窗口修改"):
+            self.store.import_presets(document)
+        self.assertEqual(self.store.presets, original)
+        self.assertEqual(self.path.read_bytes(), updated)
+
+    def test_export_contains_all_presets_ids_selection_and_current_draft(self):
+        self.store.add("第二套", self.store.current["weights"])
+        saved = self.store.current
+        draft = copy.deepcopy(saved["weights"])
+        draft["sub_stats"]["crit_rate"] = 7
+        destination = self.path.with_name("export.json")
+        self.assertFalse(self.store.export_presets(destination, current_weights=draft))
+        document = load_json(destination)
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["selected_id"], self.store.selected_id)
+        self.assertEqual(document["presets"][0], self.store.presets[0])
+        self.assertEqual(document["presets"][1], {**saved, "weights": draft})
+        self.assertEqual(self.store.current, saved)
+        self.assertEqual(self.reopen().current, saved)
+        other = WeightPresetStore(destination, self.stats, self.defaults)
+        self.assertEqual(other.presets, document["presets"])
+        self.assertEqual(other.selected_id, self.store.selected_id)
+
+    def test_export_to_local_library_uses_commit_and_updates_revision(self):
+        draft = self.store.current["weights"]
+        draft["sub_stats"]["crit_rate"] = 7
+        self.assertTrue(self.store.export_presets(self.path, current_weights=draft))
+        self.assertEqual(self.store.current["weights"], draft)
+        self.store.rename_current("导出后仍可保存")
+        self.assertEqual(self.reopen().current["name"], "导出后仍可保存")
+
+    def test_export_to_local_library_does_not_overwrite_newer_external_revision(self):
+        other = self.reopen()
+        other.add("其他窗口新增", other.current["weights"])
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "其他窗口修改"):
+            self.store.export_presets(self.path)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_export_snapshot_does_not_expose_internal_document(self):
+        document = self.store.export_document()
+        document["presets"][0]["name"] = "不能改内部"
+        self.assertNotEqual(self.store.current["name"], "不能改内部")
 
     def test_reject_empty_duplicate_and_invalid_names_without_changing_file(self):
         self.store.add("Team", self.store.current["weights"])

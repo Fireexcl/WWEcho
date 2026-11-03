@@ -188,6 +188,63 @@ class WeightPresetStore:
                 preset["weights"] = normalized
         self._commit(document)
 
+    def export_document(self, *, current_weights: dict[str, Any] | None = None) -> dict[str, Any]:
+        """导出完整方案库快照；可包含当前草稿，但不改变本地保存状态。"""
+        document = deepcopy(self._document)
+        if current_weights is not None:
+            weights = normalize_weights(self.stats, current_weights)
+            for preset in document["presets"]:
+                if preset["id"] == self.selected_id:
+                    preset["weights"] = weights
+        return document
+
+    def export_presets(self, path: Path, *, current_weights: dict[str, Any] | None = None) -> bool:
+        """导出全部方案；若目标就是本地库，使用相同的锁及版本检查提交。"""
+        document = self.export_document(current_weights=current_weights)
+        if path.resolve() == self.path.resolve():
+            self._commit(document)
+            return True
+        atomic_write_json(path, document)
+        return False
+
+    def import_presets(self, incoming: dict[str, Any]) -> dict[str, int]:
+        """按 ID 追加外部方案，相同 ID 保留本地/首次出现项，不改变当前选择。"""
+        if not isinstance(incoming, dict) or incoming.get("schema_version") != 1:
+            raise ValueError("请导入 schema_version 为 1 的完整权重方案库")
+        presets = incoming.get("presets")
+        if not isinstance(presets, list):
+            raise ValueError("权重方案库必须包含 presets 数组；旧单套权重请通过导入预设添加")
+        document = deepcopy(self._document)
+        ids = {preset["id"] for preset in document["presets"]}
+        names = {preset["name"].casefold() for preset in document["presets"]}
+        summary = {"added": 0, "skipped": 0, "renamed": 0}
+        for preset in presets:
+            if not isinstance(preset, dict):
+                raise ValueError("权重方案必须是 JSON 对象；未导入任何方案")
+            preset_id = preset.get("id")
+            if not isinstance(preset_id, str) or not preset_id:
+                raise ValueError("权重方案 ID 必须是非空字符串；未导入任何方案")
+            if preset_id in ids:
+                summary["skipped"] += 1
+                continue
+            original_name = _preset_name(preset.get("name"))
+            weights = normalize_weights(self.stats, preset.get("weights"))
+            name, number = original_name, 1
+            while name.casefold() in names:
+                suffix = f"（导入 {number}）"
+                name = original_name[:80 - len(suffix)] + suffix
+                number += 1
+            if name != original_name:
+                summary["renamed"] += 1
+            document["presets"].append({"id": preset_id, "name": name, "weights": weights})
+            ids.add(preset_id)
+            names.add(name.casefold())
+            summary["added"] += 1
+        # 只读导入全重复方案时不改写文件；所有新方案验证通过后才一次性提交。
+        if summary["added"]:
+            self._commit(document)
+        return summary
+
     def add(self, name: str, weights: dict[str, Any]) -> None:
         name = self._unique_name(name)
         normalized = normalize_weights(self.stats, weights)

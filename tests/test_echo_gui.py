@@ -843,7 +843,9 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(ControlledPlanner.instances[-1].scorer.weights["sub_stats"],
                          self.window.current_weights()["sub_stats"])
 
-    def test_weight_preset_import_cancel_preserves_draft_export_remains_compatible(self):
+    def test_weight_preset_legacy_import_cancel_and_export_full_library_with_draft(self):
+        self.add_weight_preset("第二套")
+        saved = self.window.preset_store.export_document()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         draft = self.window.current_weights()
         imported = copy.deepcopy(draft)
@@ -857,13 +859,120 @@ class EchoGuiTests(unittest.TestCase):
         with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
             self.window.export_weights()
         exported = load_json(destination)
-        self.assertEqual(exported, draft)
+        expected = copy.deepcopy(saved)
+        expected["presets"][-1]["weights"] = draft
+        self.assertEqual(exported, expected)
+        self.assertEqual(self.window.preset_store.export_document(), saved)
         self.assertTrue(self.window._weights_dirty)
-        EchoScorer(self.window.stats, exported)
+        self.assertIn("全部 2 个", self.window.statusBar().currentMessage())
+        self.assertEqual(WeightPresetStore(destination, self.window.stats, self.window.defaults).presets,
+                         exported["presets"])
+
+    def test_weight_preset_import_library_appends_by_id_without_changing_draft_or_selection(self):
+        selected_id = self.window.preset_store.selected_id
+        original_presets = self.window.preset_store.presets
+        duplicate = copy.deepcopy(original_presets[0])
+        duplicate["name"] = "不应该覆盖本地名称"
+        duplicate["weights"]["sub_stats"]["crit_rate"] = 999
+        new_preset = {"id": "external-id", "name": "外部方案", "weights": self.window.current_weights()}
+        imported = {"schema_version": 1, "selected_id": "external-id", "presets": [duplicate, new_preset]}
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        draft = self.window.current_weights()
+        version = self.window._strategy_version
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("src.echo_gui.load_json", return_value=imported), \
+                patch("src.echo_gui.QMessageBox.exec") as confirm:
+            self.window.import_weights()
+        confirm.assert_not_called()
+        self.assertEqual(self.window.preset_store.presets, original_presets + [new_preset])
+        self.assertEqual(self.window.preset_store.selected_id, selected_id)
+        self.assertEqual(self.window.weight_preset_combo.currentData(), selected_id)
+        self.assertEqual(self.window.weight_preset_combo.count(), 2)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(self.window.current_weights(), draft)
+        self.assertFalse(self.window.custom_weights_notice.isHidden())
+        self.assertEqual(self.window._strategy_version, version)
+        self.assertIn("新增 1 个，跳过重复 ID 1 个", self.window.statusBar().currentMessage())
+        stored = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
+        self.assertEqual(stored.presets, original_presets + [new_preset])
+        self.assertEqual(stored.selected_id, selected_id)
+        # 新方案可正常切换并参与评分，重复导入不会再增加。
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("src.echo_gui.load_json", return_value=imported):
+            self.window.import_weights()
+        self.assertEqual(self.window.weight_preset_combo.count(), 2)
+        self.assertIn("新增 0 个，跳过重复 ID 2 个", self.window.statusBar().currentMessage())
+        self.window.weight_preset_combo.setCurrentIndex(self.window.weight_preset_combo.findData("external-id"))
+        self.assertEqual(self.window.current_weights(), new_preset["weights"])
+        self.assertFalse(self.window._weights_dirty)
+        expected = EchoScorer(self.window.stats, new_preset["weights"]).score(self.window.current_echo())
+        self.assertEqual(self.window.score_label.text(), f"{expected['score']:g} 分")
+
+    def test_weight_preset_import_library_same_name_different_id_gets_suffix(self):
+        imported = {"schema_version": 1, "presets": [
+            {"id": "new-id", "name": DEFAULT_PRESET_NAME, "weights": self.window.current_weights()}]}
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("src.echo_gui.load_json", return_value=imported):
+            self.window.import_weights()
+        combo = self.window.weight_preset_combo
+        self.assertEqual(combo.itemText(combo.findData("new-id")), DEFAULT_PRESET_NAME + "（导入 1）")
+        self.assertIn("同名自动重命名 1 个", self.window.statusBar().currentMessage())
+
+    def test_weight_preset_import_invalid_library_or_write_failure_preserves_draft(self):
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        draft = self.window.current_weights()
+        saved = self.window.preset_store.export_document()
+        before = self.presets_path.read_bytes()
+        valid = {"id": "valid", "name": "有效", "weights": draft}
+        invalid = {"id": "invalid", "name": "无效", "weights": {}}
+        for presets in ([valid, invalid], {"not": "a-list"}):
+            with self.subTest(presets=presets), \
+                    patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                    patch("src.echo_gui.load_json", return_value={"schema_version": 1, "presets": presets}), \
+                    patch("src.echo_gui.QMessageBox.warning") as warning:
+                self.window.import_weights()
+            warning.assert_called_once()
+            self.assertEqual(self.window.current_weights(), draft)
+            self.assertEqual(self.window.preset_store.export_document(), saved)
+            self.assertEqual(self.presets_path.read_bytes(), before)
+        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("src.echo_gui.load_json", return_value={"schema_version": 1, "presets": [valid]}), \
+                patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")), \
+                patch("src.echo_gui.QMessageBox.warning") as warning:
+            self.window.import_weights()
+        warning.assert_called_once()
+        self.assertEqual(self.window.current_weights(), draft)
+        self.assertEqual(self.window.preset_store.export_document(), saved)
+        self.assertEqual(self.presets_path.read_bytes(), before)
+        self.assertTrue(self.window._weights_dirty)
+
+    def test_weight_preset_export_to_local_library_updates_saved_state_and_revision(self):
+        self.add_weight_preset("第二套")
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")):
+            self.window.export_weights()
+        self.assertFalse(self.window._weights_dirty)
+        self.assertTrue(self.window.custom_weights_notice.isHidden())
+        self.assertEqual(load_json(self.presets_path)["presets"][-1]["weights"], self.window.current_weights())
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(8)
+        self.assertTrue(self.window.save_weights())
+
+    def test_weight_preset_export_to_local_library_external_conflict_keeps_edits(self):
+        other = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
+        other.add("其他窗口新增", other.current["weights"])
+        before = self.presets_path.read_bytes()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")), \
+                patch("src.echo_gui.QMessageBox.warning") as warning:
+            self.window.export_weights()
+        warning.assert_called_once()
+        self.assertEqual(self.presets_path.read_bytes(), before)
+        self.assertTrue(self.window._weights_dirty)
+        self.assertEqual(self.window.weight_inputs["sub_stats"]["crit_rate"].value(), 7)
 
     def test_weight_preset_failed_export_preserves_existing_file(self):
         destination = self.presets_path.with_name("export.json")
-        original = self.window.current_weights()
+        original = self.window.preset_store.export_document()
         destination.write_text(json.dumps(original), encoding="utf-8")
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")), \
@@ -948,7 +1057,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(open_dialog.call_args.args[2], str(self.presets_path.parent))
         with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=("", "")) as save_dialog:
             self.window.export_weights()
-        self.assertEqual(save_dialog.call_args.args[2], str(self.presets_path.with_name("my-weights.json")))
+        self.assertEqual(save_dialog.call_args.args[2], str(self.presets_path.with_name("weight-presets-export.json")))
 
     def test_weight_tab_order_and_layout(self):
         tabs = self.window.findChild(QTabWidget)
