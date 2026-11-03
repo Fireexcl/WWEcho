@@ -20,7 +20,7 @@ from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QMessageBox, QTabWidget, QToolButton, QWidget,
+    QMessageBox, QStyledItemDelegate, QTabWidget, QToolButton, QWidget,
 )
 from src.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
@@ -299,7 +299,7 @@ class EchoGuiTests(unittest.TestCase):
             self.window.restore_weights()
             box = next(iter(inputs.values()))
             box.setValue(box.value() + 1)
-            self.assertEqual(combo.currentText(), "自定义权重")
+            self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + "（有修改）")
             self.assertFalse(self.window.custom_weights_notice.isHidden())
         self.window.restore_weights()
         preset = self.window.current_weights()
@@ -325,7 +325,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.current_weights(), preset)
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         box.setValue(box.value() + 1)
-        self.assertEqual(combo.currentText(), "自定义权重")
+        self.assertEqual(combo.currentText(), "导入方案（有修改）")
         combo.setCurrentIndex(combo.findData(self.window.preset_store.presets[0]["id"]))
         self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
         self.assertTrue(self.window.custom_weights_notice.isHidden())
@@ -648,7 +648,7 @@ class EchoGuiTests(unittest.TestCase):
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         original = box.value()
         box.setValue(original + 1)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + "（有修改）")
         notice = self.window.custom_weights_notice
         self.assertEqual(notice.text(), "当前为自定义权重")
         self.assertFalse(notice.isHidden())
@@ -673,17 +673,17 @@ class EchoGuiTests(unittest.TestCase):
         original = box.value()
         for value, text, background, foreground in (
             (original, saved["name"], "#e8efff", "#2456a6"),
-            (original + 1, "自定义权重", "#fff8eb", "#b45309"),
+            (original + 1, saved["name"] + "（有修改）", "#fff8eb", "#b45309"),
             (original, saved["name"], "#e8efff", "#2456a6")):
             with self.subTest(text=text):
                 box.setValue(value)
                 self.app.processEvents()
                 self.assertEqual(combo.currentText(), text)
-            self.assertEqual(combo.palette().button().color().name(), background)
-            self.assertEqual(combo.palette().buttonText().color().name(), foreground)
-            if self.window._weights_dirty:
-                self.assertEqual(combo.palette().button().color(), box.palette().base().color())
-                self.assertEqual(combo.palette().buttonText().color(), box.palette().text().color())
+                self.assertEqual(combo.palette().button().color().name(), background)
+                self.assertEqual(combo.palette().buttonText().color().name(), foreground)
+                if self.window._weights_dirty:
+                    self.assertEqual(combo.palette().button().color(), box.palette().base().color())
+                    self.assertEqual(combo.palette().buttonText().color(), box.palette().text().color())
                 self.assertEqual(combo.currentData(), selected_id)
                 self.assertEqual(self.window.preset_store.current, saved)
         self.assertEqual(self.window.cost.palette().button().color().name(), "#ffffff")
@@ -694,11 +694,11 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(combo.palette().button().color().name(), "#e8efff")
         self.assertEqual(combo.palette().buttonText().color().name(), "#2456a6")
 
-    def test_weight_preset_custom_label_keeps_original_name_for_save_and_confirmation(self):
+    def test_weight_preset_modified_label_keeps_original_name_for_save_and_confirmation(self):
         self.add_weight_preset("角色方案")
         selected_id = self.window.preset_store.selected_id
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "角色方案（有修改）")
 
         def cancel_with_original_name(dialog):
             self.assertIn("角色方案", dialog.text())
@@ -712,6 +712,124 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.weight_preset_combo.currentText(), "角色方案")
         self.assertEqual(self.window.preset_store.selected_id, selected_id)
         self.assertEqual(self.window.preset_store.current["weights"]["sub_stats"]["crit_rate"], 7)
+
+    def test_weight_preset_popup_items_stay_white_and_neutral_in_both_states(self):
+        self.add_weight_preset("第二套")
+        self.window.show()
+        self.app.processEvents()
+        combo = self.window.weight_preset_combo
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        original = box.value()
+        for value in (original, original + 1, original):
+            with self.subTest(value=value):
+                box.setValue(value)
+                combo.showPopup()
+                try:
+                    self.app.processEvents()
+                    view = combo.view()
+                    self.assertIsInstance(combo.itemDelegate(), QStyledItemDelegate)
+                    self.assertEqual(view.palette().base().color().name(), "#ffffff")
+                    self.assertEqual(view.palette().text().color().name(), "#243247")
+                    self.assertEqual(view.palette().highlight().color().name(), "#e8efff")
+                    self.assertEqual(view.palette().highlightedText().color().name(), "#2456a6")
+                    viewport = view.viewport()
+                    image = viewport.grab().toImage()
+                    rect = view.visualRect(combo.model().index(0, 0)).intersected(viewport.rect())
+                    self.assertFalse(rect.isEmpty())
+                    x = int((rect.right() - 8) * image.width() / viewport.width())
+                    y = int(rect.center().y() * image.height() / viewport.height())
+                    self.assertEqual(image.pixelColor(x, y).name(), "#ffffff")
+                finally:
+                    combo.hidePopup()
+
+    def test_weight_preset_discard_buttons_restore_saved_values_for_all_tabs(self):
+        for inputs in self.window.weight_inputs.values():
+            box = next(iter(inputs.values()))
+            box.setValue(box.value() + .25)
+        self.add_weight_preset("需要还原的方案")
+        saved = self.window.current_weights()
+        self.assertNotEqual(saved, self.window.defaults)
+        selected_id = self.window.preset_store.selected_id
+        self.choose_example()
+        echo, score = self.window.current_echo(), self.window.score_label.text()
+        target = self.window.target.value()
+        parameters = {name: box.value() for name, box in self.window.strategy_inputs.items()}
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(set(self.window.discard_weight_buttons), set(self.window.weight_inputs))
+        self.assertTrue(all(button.isHidden() for button in self.window.discard_weight_buttons.values()))
+        for index, category in enumerate(self.window.weight_inputs):
+            with self.subTest(category=category):
+                self.window.weight_tabs.setCurrentIndex(index)
+                for inputs in self.window.weight_inputs.values():
+                    box = next(iter(inputs.values()))
+                    box.setValue(box.value() + 1)
+                self.app.processEvents()
+                self.assertTrue(all(not button.isHidden() for button in self.window.discard_weight_buttons.values()))
+                button = self.window.discard_weight_buttons[category]
+                self.assertTrue(button.isVisible())
+                self.assertEqual(button.text(), "放弃修改")
+                footer = button.parentWidget().layout().itemAt(2).layout()
+                self.assertIs(footer.itemAt(1).widget(), self.window.clear_weight_buttons[category])
+                self.assertIs(footer.itemAt(2).widget(), button)
+                before_disk = self.presets_path.read_bytes()
+                version = self.window._strategy_version
+                with patch.object(self.window.preset_store, "_commit") as commit:
+                    button.click()
+                commit.assert_not_called()
+                self.assertEqual(self.presets_path.read_bytes(), before_disk)
+                self.assertEqual(self.window.current_weights(), saved)
+                self.assertEqual(self.window.current_echo(), echo)
+                self.assertEqual(self.window.score_label.text(), score)
+                self.assertEqual(self.window.target.value(), target)
+                self.assertEqual({name: box.value() for name, box in self.window.strategy_inputs.items()}, parameters)
+                self.assertEqual(self.window.preset_store.selected_id, selected_id)
+                self.assertEqual(self.window.weight_preset_combo.currentText(), "需要还原的方案")
+                self.assertEqual(self.window.weight_preset_combo.palette().button().color().name(), "#e8efff")
+                self.assertEqual(self.window._strategy_version, version + 1)
+                self.assertFalse(self.window._weights_dirty)
+                self.assertTrue(self.window.custom_weights_notice.isHidden())
+                self.assertTrue(all(button.isHidden() for button in self.window.discard_weight_buttons.values()))
+
+    def test_weight_preset_discard_reverts_pending_editor_text_without_saving(self):
+        saved = self.window.current_weights()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        box = self.window.weight_inputs["main_stats_4"]["crit_rate"]
+        box.selectAll()
+        QTest.keyClicks(box, "3.1256")
+        self.assertNotEqual(box.cleanText(), f"{box.value():.4f}")
+        self.window.discard_weight_buttons["sub_stats"].click()
+        self.assertEqual(self.window.current_weights(), saved)
+        self.assertEqual(box.cleanText(), f"{box.value():.4f}")
+        self.assertFalse(self.window._weights_dirty)
+
+    def test_weight_preset_discard_visibility_follows_revert_save_and_switch(self):
+        default_id = self.window.preset_store.selected_id
+        self.add_weight_preset("新方案")
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        original = box.value()
+        for action in (lambda: box.setValue(original), self.window.save_weights,
+                       lambda: self.window.weight_preset_combo.setCurrentIndex(
+                           self.window.weight_preset_combo.findData(default_id))):
+            box.setValue(original + 1)
+            self.assertTrue(all(not button.isHidden() for button in self.window.discard_weight_buttons.values()))
+            action()
+            self.assertTrue(all(button.isHidden() for button in self.window.discard_weight_buttons.values()))
+            original = box.value()
+
+    def test_weight_preset_discard_refreshes_score_and_background_strategy(self):
+        self.choose_example()
+        original_score = self.window.score_label.text()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        changed_planner = ControlledPlanner.instances[-1]
+        self.window.discard_weight_buttons["sub_stats"].click()
+        self.assertEqual(self.window.score_label.text(), original_score)
+        self.assertEqual(self.window.current_strategy.text(), "—")
+        self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
+        self.assertIsNot(ControlledPlanner.instances[-1], changed_planner)
+        self.assertEqual(ControlledPlanner.instances[-1].scorer.weights["sub_stats"],
+                         self.window.preset_store.current["weights"]["sub_stats"])
 
     def test_weight_preset_switch_save_discard_cancel_and_persist_selection(self):
         default_id = self.window.preset_store.selected_id
@@ -813,7 +931,7 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch("src.echo_gui.QInputDialog.getText", return_value=("新名字", True)):
             self.window.rename_weights()
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "新名字（有修改）")
         self.assertEqual(self.window.preset_store.current["name"], "新名字")
         self.assertEqual(self.window.preset_store.current["weights"], saved)
         self.assertEqual(self.window.weight_inputs["sub_stats"]["crit_rate"].value(), 7)
@@ -829,7 +947,7 @@ class EchoGuiTests(unittest.TestCase):
                 self.assertFalse(self.window.save_weights_as())
                 self.window.rename_weights()
             self.assertEqual(self.presets_path.read_bytes(), before)
-            self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+            self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲（有修改）")
 
     def test_weight_preset_delete_confirmation_and_protect_last(self):
         self.assertFalse(self.window.delete_weights_action.isEnabled())
@@ -840,7 +958,7 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
             self.window.delete_weights()
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲（有修改）")
         with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
             self.window.delete_weights_action.trigger()
         self.assertEqual(self.window.weight_preset_combo.count(), 1)
@@ -867,7 +985,10 @@ class EchoGuiTests(unittest.TestCase):
                 footer = page_layout.itemAt(2).layout()
                 self.assertIsNotNone(footer.itemAt(0).spacerItem())
                 self.assertIs(footer.itemAt(1).widget(), button)
-                self.assertEqual(button.geometry().right(), page_layout.contentsRect().right())
+                discard = self.window.discard_weight_buttons[category]
+                self.assertIs(footer.itemAt(2).widget(), discard)
+                self.assertEqual(discard.geometry().right(), page_layout.contentsRect().right())
+                self.assertLess(button.geometry().right(), discard.geometry().left())
                 self.assertLessEqual(page_layout.contentsRect().bottom() - button.geometry().bottom(), 2)
                 version = self.window._strategy_version
                 button.click()
@@ -913,7 +1034,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(exported, expected)
         self.assertEqual(self.window.preset_store.export_document(), saved)
         self.assertTrue(self.window._weights_dirty)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "第二套（有修改）")
         self.assertIn("全部 2 个", self.window.statusBar().currentMessage())
         self.assertEqual(WeightPresetStore(destination, self.window.stats, self.window.defaults).presets,
                          exported["presets"])
@@ -965,7 +1086,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.selected_id, selected_id)
         self.assertEqual(self.window.weight_preset_combo.currentData(), selected_id)
         self.assertEqual(self.window.weight_preset_combo.count(), 2)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + "（有修改）")
         self.assertEqual(self.window.current_weights(), draft)
         self.assertFalse(self.window.custom_weights_notice.isHidden())
         self.assertEqual(self.window._strategy_version, version)
@@ -1066,7 +1187,7 @@ class EchoGuiTests(unittest.TestCase):
             window = EchoWindow(presets_path=path)
         try:
             self.assertIsNotNone(window._score_result)
-            self.assertEqual(window.weight_preset_combo.currentText(), "自定义权重")
+            self.assertEqual(window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + "（有修改）")
             self.assertIn("尚未保存", window.statusBar().currentMessage())
             self.assertFalse(window.preset_store.persisted)
             self.assertTrue(window.save_weights())

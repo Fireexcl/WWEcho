@@ -608,6 +608,23 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.wait_for_result()
         self.assertEqual(self.window._reconstruction_result, original)
 
+    def test_weight_preset_discard_refreshes_both_reconstruction_pages(self):
+        self.window.reconstruction_budget.setValue(0)
+        self.fill_five()
+        self.wait_for_result()
+        original = self.window._reconstruction_result
+        saved = self.window.current_weights()
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        self.wait_for_result()
+        self.assertNotEqual(self.window._reconstruction_result, original)
+        self.window.discard_weight_buttons["sub_stats"].click()
+        self.assertEqual(self.window.current_weights(), saved)
+        self.assertIsNone(self.window._reconstruction_result)
+        self.assertEqual(self.window.reconstruction_plans_table.rowCount(), 0)
+        self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
+        self.wait_for_result()
+        self.assertEqual(self.window._reconstruction_result, original)
+
     def test_no_improvement_displays_undefined_gain_and_infinite_success_cost(self):
         self.fill_five()
         weights = self.window.current_weights()

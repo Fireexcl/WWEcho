@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTabWidget, QToolButton,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStyledItemDelegate, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -78,8 +78,9 @@ QComboBox#weightPreset[customWeights="true"] {
     color: #b45309; background: #fff8eb; font-weight: 600; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e8effc;
                             selection-color: #1d4ed8; padding: 4px; }
-QComboBox#weightPreset QAbstractItemView { selection-background-color: #e8efff;
-                                       selection-color: #2456a6; }
+QComboBox#weightPreset QAbstractItemView {
+    background: white; color: #243247; font-weight: 400;
+    selection-background-color: #e8efff; selection-color: #2456a6; }
 QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
     background: #f1f4f8; color: #9aa7b8; border-color: #e4e9f0; }
 QLabel:disabled { color: #9aa7b8; }
@@ -390,6 +391,7 @@ class EchoWindow(QMainWindow):
         self.weight_inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
         self.weight_tables: dict[str, QTableWidget] = {}
         self.clear_weight_buttons: dict[str, QPushButton] = {}
+        self.discard_weight_buttons: dict[str, QPushButton] = {}
         self.sub_stat_buttons: dict[str, QPushButton] = {}
         self.selected_sub_stats: list[str] = []
         self.sub_tier_inputs: dict[str, QComboBox] = {}
@@ -523,6 +525,8 @@ class EchoWindow(QMainWindow):
         presets.addWidget(QLabel("权重方案"))
         self.weight_preset_combo = QComboBox()
         self.weight_preset_combo.setObjectName("weightPreset")
+        # 原生菜单代理会使用下拉框自身的调色板，导致全部选项继承蓝/橙色。
+        self.weight_preset_combo.setItemDelegate(QStyledItemDelegate(self.weight_preset_combo))
         self.weight_preset_combo.setMinimumContentsLength(12)
         self.weight_preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.weight_preset_combo.setAccessibleName("权重方案")
@@ -594,6 +598,12 @@ class EchoWindow(QMainWindow):
             clear.clicked.connect(lambda _checked=False, selected=category: self.clear_weight_page(selected))
             self.clear_weight_buttons[category] = clear
             footer.addWidget(clear)
+            discard = QPushButton("放弃修改")
+            discard.setAccessibleName("放弃当前方案的全部权重修改")
+            discard.clicked.connect(self.discard_weight_changes)
+            discard.hide()
+            self.discard_weight_buttons[category] = discard
+            footer.addWidget(discard)
             page_layout.addLayout(footer)
             tabs.addTab(page, title)
         layout.addWidget(tabs)
@@ -621,13 +631,15 @@ class EchoWindow(QMainWindow):
         self._weights_dirty = not self.preset_store.persisted or self.current_weights() != preset["weights"]
         combo = self.weight_preset_combo
         index = combo.findData(preset["id"])
-        combo.setItemText(index, "自定义权重" if self._weights_dirty else preset["name"])
+        combo.setItemText(index, preset["name"] + ("（有修改）" if self._weights_dirty else ""))
         if combo.property("customWeights") != self._weights_dirty:
             combo.setProperty("customWeights", self._weights_dirty)
             combo.style().unpolish(combo)
             combo.style().polish(combo)
             combo.update()
         self.custom_weights_notice.setVisible(self._weights_dirty)
+        for button in self.discard_weight_buttons.values():
+            button.setVisible(self._weights_dirty)
         self.delete_weights_action.setEnabled(len(self.preset_store.presets) > 1)
         for inputs in self.weight_inputs.values():
             for box in inputs.values():
@@ -647,6 +659,12 @@ class EchoWindow(QMainWindow):
         finally:
             self.updating = previous
         self._weight_changed()
+
+    def discard_weight_changes(self) -> None:
+        """恢复当前方案全部已保存的权重，不写入方案库。"""
+        preset = self.preset_store.current
+        self.apply_weights(preset["weights"])
+        self.statusBar().showMessage(f"已放弃修改，恢复方案“{preset['name']}”的已保存权重", 5000)
 
     def _commit_weight_edits(self) -> None:
         for inputs in self.weight_inputs.values():
