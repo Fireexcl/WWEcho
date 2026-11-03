@@ -77,13 +77,16 @@ QDoubleSpinBox[weightEditor="true"][nonzero="true"] {
     color: #b45309; background: #fff8eb; font-weight: 600; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e8effc;
                             selection-color: #1d4ed8; padding: 4px; }
+QComboBox#weightPreset QAbstractItemView { selection-background-color: #e8efff;
+                                       selection-color: #2456a6; }
 QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
     background: #f1f4f8; color: #9aa7b8; border-color: #e4e9f0; }
 QLabel:disabled { color: #9aa7b8; }
 QTabWidget::pane { border: 1px solid #e1e7f0; border-radius: 8px; background: white; }
 QTabBar::tab { background: #f0f3f9; color: #65758b; padding: 9px 12px;
                margin-right: 3px; border-top-left-radius: 7px; border-top-right-radius: 7px; }
-QTabBar::tab:selected { background: #e8efff; color: #2456a6; font-weight: 600; }
+QComboBox#weightPreset, QTabBar::tab:selected {
+    background: #e8efff; color: #2456a6; font-weight: 600; }
 QTabBar::tab:hover { color: #2563eb; }
 QTableWidget { border: 1px solid #e1e7f0; background: white; alternate-background-color: #f7f9fc;
                gridline-color: #eef2f7; selection-background-color: #e4edff;
@@ -518,6 +521,7 @@ class EchoWindow(QMainWindow):
         presets = QHBoxLayout()
         presets.addWidget(QLabel("权重方案"))
         self.weight_preset_combo = QComboBox()
+        self.weight_preset_combo.setObjectName("weightPreset")
         self.weight_preset_combo.setMinimumContentsLength(12)
         self.weight_preset_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.weight_preset_combo.setAccessibleName("权重方案")
@@ -615,7 +619,7 @@ class EchoWindow(QMainWindow):
         preset = self.preset_store.current
         self._weights_dirty = not self.preset_store.persisted or self.current_weights() != preset["weights"]
         index = self.weight_preset_combo.findData(preset["id"])
-        self.weight_preset_combo.setItemText(index, preset["name"] + (" *" if self._weights_dirty else ""))
+        self.weight_preset_combo.setItemText(index, "自定义权重" if self._weights_dirty else preset["name"])
         self.custom_weights_notice.setVisible(self._weights_dirty)
         self.delete_weights_action.setEnabled(len(self.preset_store.presets) > 1)
         for inputs in self.weight_inputs.values():
@@ -1625,24 +1629,17 @@ class EchoWindow(QMainWindow):
             return
         try:
             data = load_json(Path(name))
-            if "presets" in data:
-                # 合并不覆盖当前方案；无须放弃当前草稿，也不切换到导入库的 selected_id。
-                self._commit_weight_edits()
-                summary = self.preset_store.import_presets(data)
-                self._refresh_weight_options()
-                self._refresh_weight_state()
-                self.statusBar().showMessage(
-                    f"方案库导入完成：新增 {summary['added']} 个，跳过重复 ID {summary['skipped']} 个，"
-                    f"同名自动重命名 {summary['renamed']} 个；当前方案与编辑内容保持不变", 10000)
-                return
-            # 兼容旧版单套权重导入；保留原来的草稿与保存/另存为流程。
-            weights = normalize_weights(self.stats, data)
+            # 仅合并方案库；保留当前选择和草稿，不支持旧版单套权重。
+            self._commit_weight_edits()
+            summary = self.preset_store.import_presets(data)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             QMessageBox.warning(self, "导入失败", str(exc))
             return
-        if self._confirm_unsaved_weights():
-            self.apply_weights(weights)
-            self.statusBar().showMessage("已导入权重；请保存修改或另存为新方案", 5000)
+        self._refresh_weight_options()
+        self._refresh_weight_state()
+        self.statusBar().showMessage(
+            f"方案库导入完成：新增 {summary['added']} 个，跳过重复 ID {summary['skipped']} 个，"
+            f"同名自动重命名 {summary['renamed']} 个；当前方案与编辑内容保持不变", 10000)
 
     def export_weights(self) -> None:
         self._commit_weight_edits()

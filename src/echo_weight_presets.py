@@ -213,7 +213,7 @@ class WeightPresetStore:
             raise ValueError("请导入 schema_version 为 1 的完整权重方案库")
         presets = incoming.get("presets")
         if not isinstance(presets, list):
-            raise ValueError("权重方案库必须包含 presets 数组；旧单套权重请通过导入预设添加")
+            raise ValueError("权重方案库必须包含 presets 数组；不支持单套权重导入")
         document = deepcopy(self._document)
         ids = {preset["id"] for preset in document["presets"]}
         names = {preset["name"].casefold() for preset in document["presets"]}

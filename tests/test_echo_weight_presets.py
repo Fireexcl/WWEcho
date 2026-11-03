@@ -247,6 +247,14 @@ class WeightPresetStoreTests(unittest.TestCase):
                              {"added": 0, "skipped": 0, "renamed": 0})
         commit.assert_not_called()
 
+    def test_import_rejects_single_weights_with_clear_library_format_error(self):
+        before = self.path.read_bytes()
+        original = self.store.export_document()
+        with self.assertRaisesRegex(ValueError, "不支持单套权重"):
+            self.store.import_presets(self.defaults)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.store.export_document(), original)
+
     def test_import_invalid_new_preset_is_atomic_and_does_not_change_disk_or_memory(self):
         original = self.store.presets
         before = self.path.read_bytes()

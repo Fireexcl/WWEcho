@@ -299,18 +299,22 @@ class EchoGuiTests(unittest.TestCase):
             self.window.restore_weights()
             box = next(iter(inputs.values()))
             box.setValue(box.value() + 1)
-            self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
+            self.assertEqual(combo.currentText(), "自定义权重")
             self.assertFalse(self.window.custom_weights_notice.isHidden())
         self.window.restore_weights()
         preset = self.window.current_weights()
         preset["sub_stats"]["crit_rate"] += 1
+        incoming = {"schema_version": 1, "presets": [
+            {"id": "imported-id", "name": "导入方案", "weights": preset}]}
         with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色权重.json", "")), \
-                patch("src.echo_gui.load_json", return_value=preset):
+                patch("src.echo_gui.load_json", return_value=incoming):
             self.window.import_weights()
-        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
+        combo.setCurrentIndex(combo.findData("imported-id"))
+        self.assertEqual(combo.currentText(), "导入方案")
         self.assertEqual(self.window.current_weights(), preset)
         self.window.clear_sub_stats()
-        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(combo.currentText(), "导入方案")
         with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")):
             self.window.import_weights()
         self.assertEqual(self.window.current_weights(), preset)
@@ -321,8 +325,8 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.current_weights(), preset)
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         box.setValue(box.value() + 1)
-        self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME + " *")
-        self.window.restore_weights()
+        self.assertEqual(combo.currentText(), "自定义权重")
+        combo.setCurrentIndex(combo.findData(self.window.preset_store.presets[0]["id"]))
         self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
         self.assertTrue(self.window.custom_weights_notice.isHidden())
 
@@ -644,7 +648,7 @@ class EchoGuiTests(unittest.TestCase):
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         original = box.value()
         box.setValue(original + 1)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
         notice = self.window.custom_weights_notice
         self.assertEqual(notice.text(), "当前为自定义权重")
         self.assertFalse(notice.isHidden())
@@ -657,6 +661,46 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME)
         self.assertTrue(notice.isHidden())
         self.assertFalse(self.window._weights_dirty)
+
+    def test_weight_preset_combo_light_blue_for_saved_and_custom_weights(self):
+        self.window.show()
+        self.app.processEvents()
+        combo = self.window.weight_preset_combo
+        self.assertEqual(combo.objectName(), "weightPreset")
+        selected_id = combo.currentData()
+        saved = self.window.preset_store.current
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        original = box.value()
+        for value, text in ((original, saved["name"]), (original + 1, "自定义权重"),
+                            (original, saved["name"])):
+            with self.subTest(text=text):
+                box.setValue(value)
+                self.app.processEvents()
+                self.assertEqual(combo.currentText(), text)
+                self.assertEqual(combo.palette().button().color().name(), "#e8efff")
+                self.assertEqual(combo.palette().buttonText().color().name(), "#2456a6")
+                self.assertEqual(combo.currentData(), selected_id)
+                self.assertEqual(self.window.preset_store.current, saved)
+        self.assertEqual(self.window.cost.palette().button().color().name(), "#ffffff")
+
+    def test_weight_preset_custom_label_keeps_original_name_for_save_and_confirmation(self):
+        self.add_weight_preset("角色方案")
+        selected_id = self.window.preset_store.selected_id
+        self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+
+        def cancel_with_original_name(dialog):
+            self.assertIn("角色方案", dialog.text())
+            self.assertNotIn("自定义权重", dialog.text())
+            return QMessageBox.StandardButton.Cancel
+
+        with patch("src.echo_gui.QMessageBox.exec", cancel_with_original_name):
+            self.assertFalse(self.window.close())
+        self.assertEqual(self.window.weight_preset_combo.currentData(), selected_id)
+        self.assertTrue(self.window.save_weights())
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "角色方案")
+        self.assertEqual(self.window.preset_store.selected_id, selected_id)
+        self.assertEqual(self.window.preset_store.current["weights"]["sub_stats"]["crit_rate"], 7)
 
     def test_weight_preset_switch_save_discard_cancel_and_persist_selection(self):
         default_id = self.window.preset_store.selected_id
@@ -758,7 +802,8 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch("src.echo_gui.QInputDialog.getText", return_value=("新名字", True)):
             self.window.rename_weights()
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "新名字 *")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
+        self.assertEqual(self.window.preset_store.current["name"], "新名字")
         self.assertEqual(self.window.preset_store.current["weights"], saved)
         self.assertEqual(self.window.weight_inputs["sub_stats"]["crit_rate"].value(), 7)
 
@@ -773,7 +818,7 @@ class EchoGuiTests(unittest.TestCase):
                 self.assertFalse(self.window.save_weights_as())
                 self.window.rename_weights()
             self.assertEqual(self.presets_path.read_bytes(), before)
-            self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲 *")
+            self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
 
     def test_weight_preset_delete_confirmation_and_protect_last(self):
         self.assertFalse(self.window.delete_weights_action.isEnabled())
@@ -784,7 +829,7 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
             self.window.delete_weights()
-        self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲 *")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
         with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
             self.window.delete_weights_action.trigger()
         self.assertEqual(self.window.weight_preset_combo.count(), 1)
@@ -843,18 +888,11 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(ControlledPlanner.instances[-1].scorer.weights["sub_stats"],
                          self.window.current_weights()["sub_stats"])
 
-    def test_weight_preset_legacy_import_cancel_and_export_full_library_with_draft(self):
+    def test_weight_preset_export_full_library_with_custom_weights(self):
         self.add_weight_preset("第二套")
         saved = self.window.preset_store.export_document()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         draft = self.window.current_weights()
-        imported = copy.deepcopy(draft)
-        imported["sub_stats"]["crit_rate"] = 9
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色.json", "")), \
-                patch("src.echo_gui.load_json", return_value=imported), \
-                patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Cancel):
-            self.window.import_weights()
-        self.assertEqual(self.window.current_weights(), draft)
         destination = self.presets_path.with_name("export.json")
         with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
             self.window.export_weights()
@@ -864,9 +902,37 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(exported, expected)
         self.assertEqual(self.window.preset_store.export_document(), saved)
         self.assertTrue(self.window._weights_dirty)
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
         self.assertIn("全部 2 个", self.window.statusBar().currentMessage())
         self.assertEqual(WeightPresetStore(destination, self.window.stats, self.window.defaults).presets,
                          exported["presets"])
+
+    def test_weight_preset_reject_single_weights_without_changing_library_or_inputs(self):
+        single = self.window.current_weights()
+        single["sub_stats"]["crit_rate"] = 9
+        for dirty in (False, True):
+            with self.subTest(dirty=dirty):
+                if dirty:
+                    self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
+                before_weights = self.window.current_weights()
+                before_document = self.window.preset_store.export_document()
+                before_disk = self.presets_path.read_bytes()
+                before_text = self.window.weight_preset_combo.currentText()
+                with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/单套.json", "")), \
+                        patch("src.echo_gui.load_json", return_value=single), \
+                        patch("src.echo_gui.QMessageBox.warning") as warning, \
+                        patch("src.echo_gui.QMessageBox.exec") as confirm, \
+                        patch.object(self.window, "apply_weights") as apply:
+                    self.window.import_weights()
+                warning.assert_called_once()
+                self.assertIn("不支持单套权重", warning.call_args.args[2])
+                confirm.assert_not_called()
+                apply.assert_not_called()
+                self.assertEqual(self.window.current_weights(), before_weights)
+                self.assertEqual(self.window.preset_store.export_document(), before_document)
+                self.assertEqual(self.presets_path.read_bytes(), before_disk)
+                self.assertEqual(self.window.weight_preset_combo.currentText(), before_text)
+                self.assertEqual(self.window._weights_dirty, dirty)
 
     def test_weight_preset_import_library_appends_by_id_without_changing_draft_or_selection(self):
         selected_id = self.window.preset_store.selected_id
@@ -888,7 +954,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.preset_store.selected_id, selected_id)
         self.assertEqual(self.window.weight_preset_combo.currentData(), selected_id)
         self.assertEqual(self.window.weight_preset_combo.count(), 2)
-        self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+        self.assertEqual(self.window.weight_preset_combo.currentText(), "自定义权重")
         self.assertEqual(self.window.current_weights(), draft)
         self.assertFalse(self.window.custom_weights_notice.isHidden())
         self.assertEqual(self.window._strategy_version, version)
@@ -989,7 +1055,7 @@ class EchoGuiTests(unittest.TestCase):
             window = EchoWindow(presets_path=path)
         try:
             self.assertIsNotNone(window._score_result)
-            self.assertEqual(window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME + " *")
+            self.assertEqual(window.weight_preset_combo.currentText(), "自定义权重")
             self.assertIn("尚未保存", window.statusBar().currentMessage())
             self.assertFalse(window.preset_store.persisted)
             self.assertTrue(window.save_weights())
