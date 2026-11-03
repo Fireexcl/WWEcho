@@ -770,8 +770,8 @@ class EchoGuiTests(unittest.TestCase):
                 self.assertTrue(button.isVisible())
                 self.assertEqual(button.text(), "放弃修改")
                 footer = button.parentWidget().layout().itemAt(2).layout()
-                self.assertIs(footer.itemAt(1).widget(), self.window.clear_weight_buttons[category])
-                self.assertIs(footer.itemAt(2).widget(), button)
+                self.assertIs(footer.itemAt(1).widget(), button)
+                self.assertIs(footer.itemAt(2).widget(), self.window.clear_weight_buttons[category])
                 before_disk = self.presets_path.read_bytes()
                 version = self.window._strategy_version
                 with patch.object(self.window.preset_store, "_commit") as commit:
@@ -984,11 +984,11 @@ class EchoGuiTests(unittest.TestCase):
                 page_layout = button.parentWidget().layout()
                 footer = page_layout.itemAt(2).layout()
                 self.assertIsNotNone(footer.itemAt(0).spacerItem())
-                self.assertIs(footer.itemAt(1).widget(), button)
+                self.assertIs(footer.itemAt(2).widget(), button)
                 discard = self.window.discard_weight_buttons[category]
-                self.assertIs(footer.itemAt(2).widget(), discard)
-                self.assertEqual(discard.geometry().right(), page_layout.contentsRect().right())
-                self.assertLess(button.geometry().right(), discard.geometry().left())
+                self.assertIs(footer.itemAt(1).widget(), discard)
+                self.assertEqual(button.geometry().right(), page_layout.contentsRect().right())
+                self.assertLess(discard.geometry().right(), button.geometry().left())
                 self.assertLessEqual(page_layout.contentsRect().bottom() - button.geometry().bottom(), 2)
                 version = self.window._strategy_version
                 button.click()

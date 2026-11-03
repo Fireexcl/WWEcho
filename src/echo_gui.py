@@ -597,13 +597,13 @@ class EchoWindow(QMainWindow):
             clear.setAccessibleName(f"清零{title}")
             clear.clicked.connect(lambda _checked=False, selected=category: self.clear_weight_page(selected))
             self.clear_weight_buttons[category] = clear
-            footer.addWidget(clear)
             discard = QPushButton("放弃修改")
             discard.setAccessibleName("放弃当前方案的全部权重修改")
             discard.clicked.connect(self.discard_weight_changes)
             discard.hide()
             self.discard_weight_buttons[category] = discard
             footer.addWidget(discard)
+            footer.addWidget(clear)
             page_layout.addLayout(footer)
             tabs.addTab(page, title)
         layout.addWidget(tabs)
