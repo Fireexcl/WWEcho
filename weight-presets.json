@@ -1,0 +1,128 @@
+{
+    "schema_version": 1,
+    "selected_id": "8f9d9ae28eab42ef87c51746be7d78b0",
+    "presets": [
+        {
+            "id": "8f9d9ae28eab42ef87c51746be7d78b0",
+            "name": "默认-爱弥斯",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.4,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.275,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.5,
+                        "crit_dmg": 0.25,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.12,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.1,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.77
+                }
+            }
+        },
+        {
+            "id": "adf9901e188b447bb8bd69a0577c9320",
+            "name": "锁暝",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.57,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.258,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.258,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.187,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.339,
+                        "crit_dmg": 0.17,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.019
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.11,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.18,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.2,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.15,
+                    "basic_atk_dmg_bonus": 0.941,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.134
+                }
+            }
+        }
+    ]
+}
