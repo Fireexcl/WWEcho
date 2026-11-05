@@ -2,10 +2,16 @@
 
 ```text
 WWEcho/
-├── README.md                     # 项目说明、评分规则、使用方法与测试说明
+├── README.md                     # 功能介绍、安装启动与使用说明
+├── old-readme.md                 # 旧版详细项目说明与算法口径
 ├── WIP.md                        # U R Here --> 项目目录结构
 ├── requirements.txt              # GUI 依赖：PySide6-Essentials
-├── run.sh                        # GUI 启动脚本：cmd ./run.sh 启动
+├── requirements-build.txt        # PyInstaller 等应用构建依赖
+├── run.sh                        # macOS GUI 启动脚本：cmd ./run.sh 启动
+├── run.bat                       # Windows GUI 启动脚本：双击启动
+├── build-macos.sh                # macOS .app 构建脚本
+├── build-windows.bat             # Windows EXE 构建脚本
+├── WWEcho.spec                   # PyInstaller 打包配置
 ├── .gitignore                    # Git 忽略规则
 ├── weight-presets.json           # 权重方案库，运行时创建在EXE(win11)或APP(mac) 同目录
 ├── config/
