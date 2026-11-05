@@ -344,7 +344,7 @@ class EchoGuiTests(unittest.TestCase):
     def test_cost_default_inputs_read_config_and_forward_to_worker(self):
         self.wait_until(lambda: "策略已更新" in self.window.strategy_status.text())
         params = ControlledPlanner.instances[-1].params
-        self.assertEqual(params["experience_weight"], 1.6)
+        self.assertEqual(params["experience_weight"], 0.8)
         self.assertEqual(params["recovery"], .7)
         self.assertEqual(params["tuning_recovery"], .3)
         self.assertEqual(params["tuning_weight"], 1)
@@ -1660,7 +1660,8 @@ class EchoGuiTests(unittest.TestCase):
     def test_strategy_defaults_ranges_manual_input_and_parameter_forwarding(self):
         self.assertEqual(self.window.target.value(), 30)
         expected = {"recovery": (.7, 1), "tuning_recovery": (.3, 1),
-                "tuning_weight": (1, 1_000_000), "experience_weight": (1.6, 1_000_000),
+                "tuning_weight": (1, 1_000_000),
+                "experience_weight": (0.8, 1_000_000),
                     "embryo_weight": (1, 1_000_000)}
         for name, (value, maximum) in expected.items():
             box = self.window.strategy_inputs[name]

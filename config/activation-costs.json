@@ -7,10 +7,10 @@
     "experience_weight_unit": 1000,
     "default_weights": {
         "tuning_weight": 1,
-        "experience_weight": 1.6,
+        "experience_weight": 0.8,
         "embryo_weight": 1
     },
-    "default_weights_note": "用户估计材料本同时掉落约 12000～13000 经验及 20 个打孔器，按中值 12500 折算相对成本：每个打孔器权重 1，每 1000 经验权重 20/(12500/1000)=1.6，即每 500 经验计 0.8 成本。此为供给比例预设，不代表可兑换价格或精确体力成本；胚子权重仍为可自定义的 1。",
+    "default_weights_note": "用户确认材料本同时掉落约 23000 经验及 20 个打孔器，按此供给比例估算后将经验权重取整为 0.8：每个打孔器权重 1，每 1000 经验权重 0.8，即每 500 经验计 0.4 成本。此为供给比例预设，不代表可兑换价格或精确体力成本；胚子权重仍为可自定义的 1。",
     "experience_material_unit": 500,
     "tuning_material_unit": 1,
     "enhanced_echo_material_experience_ratio": 0.7,

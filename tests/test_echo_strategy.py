@@ -152,15 +152,15 @@ class StrategyTests(unittest.TestCase):
         self.assertAlmostEqual(weighted["expected_cost"], 404.6)
         self.assertEqual(weighted["success_probability"], result["success_probability"])
 
-    def test_cost_weight_defaults_use_material_drop_midpoint(self):
+    def test_cost_weight_defaults_use_material_drop_estimate(self):
         weights = self.costs["default_weights"]
-        self.assertEqual(weights, {"tuning_weight": 1, "experience_weight": 1.6,
-                                   "embryo_weight": 1})
+        self.assertEqual(weights["tuning_weight"], 1)
+        self.assertEqual(weights["experience_weight"], 0.8)
+        self.assertEqual(weights["embryo_weight"], 1)
         self.assertEqual(self.costs["experience_weight_unit"], 1000)
-        self.assertAlmostEqual(12500 / 1000 * weights["experience_weight"],
-                               20 * weights["tuning_weight"])
         planner = ActivationPlanner(EchoScorer(self.stats, self.weights), self.costs, 30, bins=100)
-        self.assertEqual((planner.tw, planner.xw, planner.ew), (1, 1.6, 1))
+        self.assertEqual((planner.tw, planner.xw, planner.ew),
+                         (1, weights["experience_weight"], 1))
 
     def test_configured_cost_defaults_and_explicit_zero_override(self):
         costs = {**self.costs, "default_weights": {
