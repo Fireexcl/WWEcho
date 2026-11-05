@@ -1,4 +1,4 @@
-# 下一词条是否继续激活：算法讨论
+# 调频／开孔算法：下一词条是否继续激活
 
 > 状态：已实现 1000 格分数网格 DP、概率区间和按材料权重最小化达标成品平均累计成本的 Dinkelbach 最优停止，见 [策略实现](../src/echo_strategy.py) 和 [使用口径](../README.md)。旧概率门槛已从生产推荐中移除；精确分值算法、固定预算和一般效用模型仍属讨论。本文仅讨论普通调谐，不包括频整器重构、主词条获取和刷取成本。
 
@@ -37,7 +37,7 @@
 
 ## 3. 与现有评分及概率配置对齐
 
-评分实现见 [src/echo_score.py](../src/echo_score.py)，概率和档位见 [config/echo-stats.json](../config/echo-stats.json)，公示规则说明见 [调谐策略数据文档](echo-tuning-strategy.md)。
+评分实现见 [src/echo_score.py](../src/echo_score.py)，概率和档位见 [config/echo-stats.json](../config/echo-stats.json)，公示规则说明见 [总体定义与术语](General-Definition.md)。
 
 ### 3.1 状态和得分
 

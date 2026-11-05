@@ -15,7 +15,7 @@ Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.e
 
 区域3同时显示从零词条开始与当前已激活状态的结果，激活经验、打孔器及回收规则使用用户提供并确认的数据；区域 4 按锁数对应的 1/1/2/3 枚计算频整器消耗。源码版独立窗口支持 macOS/Windows；单文件 EXE 面向 Windows 11 x64，macOS 使用独立 .app 应用包。
 
-“是否继续激活下一词条”的算法见 [激活推荐算法说明](docs/activation-recommendation-algorithms.md)。已实现 1000 格概率动态规划与 Dinkelbach 累计成本最优停止，替代旧的“低于新胚子概率就弃置”规则；最优性只针对当前网格与成本模型，不代表精确游戏最优或固定预算内最高成功率。
+“是否继续激活下一词条”的算法见 [调频／开孔算法说明](docs/Algorithm-Tuning.md)。已实现 1000 格概率动态规划与 Dinkelbach 累计成本最优停止，替代旧的“低于新胚子概率就弃置”规则；最优性只针对当前网格与成本模型，不代表精确游戏最优或固定预算内最高成功率。
 
 ### macOS 应用打包与使用
 
@@ -65,7 +65,7 @@ Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.e
 
 ## 频整器概率与同预算比较
 
-实现见 [单次分析](src/echo_reconstruction.py) 与 [动态预算分析](src/echo_reconstruction_budget.py)，完整公式和假设见 [频整器算法说明](docs/reconstruction-algorithms.md)。复用 [config/echo-stats.json](config/echo-stats.json) 中已有重构规则与公示档位概率；无需新增配置 JSON，也不修改用户权重。
+实现见 [单次分析](src/echo_reconstruction.py) 与 [动态预算分析](src/echo_reconstruction_budget.py)，完整公式和假设见 [洗炼／洗词条算法说明](docs/Algorithm-Reroll.md)。复用 [config/echo-stats.json](config/echo-stats.json) 中已有重构规则与公示档位概率；无需新增配置 JSON，也不修改用户权重。
 
 - **正提升**：严格超过重构前原始评分，平分不计成功。主词条、小词条、锁定词条固定；未锁定的属性和档位重新随机，原未锁属性可以再次出现，副词条类型仍不重复。
 - **单次算法**：枚举类型子集，采用折半分布与前后缀矩求和；十进制原始贡献用有理数转整数严格比较，无区域 3 的分数网格近似。公示概率归一化后以浮点累加，档位与跨次独立为模型约定。
@@ -102,12 +102,12 @@ GUI 方案库使用程序旁的 `weight-presets.json`：源码运行时保存到
 - **ID 生成规则**：首次默认方案、新建／另存为均使用 Python `uuid4().hex`，即随机 UUID v4 的 32 位小写十六进制字符串，没有连字符。ID 不从角色名、方案名、权重内容或时间戳计算；名称或权重相同也会产生不同 ID。保存修改、重命名、导入／导出不会更换已有 ID。
 - **导出全部方案**：导出与本地方案库一致的结构，顶层包含 `schema_version`、`selected_id`、`presets`；数组中每套方案包含 `id`、`name`、`weights`。包含当前方案正在编辑的数值，其他方案使用已保存值；导出到其他位置不保存本地草稿，未保存时仍显示“原方案名（有修改）”。若主动选择覆盖当前本地方案库，则按正常保存流程提交并恢复方案名称，仍检查文件锁和版本冲突。
 - **按 ID 合并导入**：读取上述方案库结构，把新 ID 的方案追加并保存；已有 ID 直接跳过，保留本地名称和数值，绝不按导入内容覆盖。本次文件内重复 ID 也只采用第一次出现项；重复导入同一文件不会重复新增。不同 ID 即使名称、内容相同也属于不同方案，同名自动加 `（导入 1）`、`（导入 2）` 等后缀。导入后报告新增、跳过和重命名数量，保留本地当前选择与未保存编辑，不采用外部 `selected_id`（合并导入时也可省略该字段）。全部新方案验证通过后一次性保存，任一新方案无效或写入失败均不部分导入。
-- **仅支持方案库导入**：必须包含 `schema_version=1` 和 `presets` 数组；旧版仅包含 `main_stats`、`minor_stats`、`sub_stats` 的单套权重会提示导入失败，不修改现有方案或草稿。命令行评分仍读取单套方案的 `weights` 对象，不直接读取整库导出。
+- **仅支持方案库导入**：必须包含 `schema_version=1` 和 `presets` 数组；旧版仅包含 `main_stats`、`minor_stats`、`sub_stats` 的单套权重会提示导入失败，不修改现有方案或草稿。
 - 导入、导出对话框默认打开本地方案库所在目录，仍可自行选择其他位置。注意：将导出的当前草稿重新导入原库时，因为 ID 相同会被跳过；导入是追加而非更新或覆盖。
 
 以上约束针对应用业务数据：源码版安装依赖时的 pip 缓存、构建时的 PyInstaller 缓存，以及 Qt/操作系统临时文件由相应工具管理，不作为权重存储位置。单文件 EXE 运行仍可能解包到系统临时目录，但用户修改的权重始终写到 EXE 旁。
 
-修改 [config/score-weights.json](config/score-weights.json) 中的 `main_stats` 和 `sub_stats`，也可通过命令行 `--weights` 指定自己的配置。所有字段必须完整，权重为非负有限数值，无效属性可设为 0。
+通过 GUI 编辑并保存权重方案；[config/score-weights.json](config/score-weights.json) 提供初始默认权重。所有字段必须完整，权重为非负有限数值，无效属性可设为 0。
 
 本地默认配置及各方案 `weights` 对象中的 `main_stats` 均以 `"1"`、`"3"`、`"4"` 为键分组，每组包含对应 Cost 的全部合法候选，可分别设置不同权重。`sub_stats` 仍为共用副词条权重。评分及全局最高分使用各 Cost 的独立权重。方案库内的 `weights` 对象仍兼容旧版不分 Cost 的扁平主词条格式，其权重会复制到各 Cost 的对应候选中；这不代表支持导入旧版单套文件。
 
@@ -117,23 +117,17 @@ GUI 方案库使用程序旁的 `weight-presets.json`：源码运行时保存到
 
 ## 输入及使用
 
-输入格式见 [examples/echo.json](examples/echo.json)：
+声骸输入全部通过 GUI 完成，无需准备或导入声骸 JSON 文件；权重方案库的 JSON 导入／导出是独立功能。
 
-- `main_stat`：一个包含 `name`、`value` 的词条对象。
-- `sub_stats`：包含 0～5 个词条对象的数组。
-- `cost`：可选整数 1、3、4；省略时按主词条名和满级值匹配 Cost，以确定小词条。若匹配多个 Cost 且主词条权重或小词条不同，必须显式提供。
-- `name` 支持配置中的准确中文名或统一英文标识；例如“固定攻击”和 `atk_flat`，不接受含糊的“攻击”。
-- `value` 使用 JSON 数字；百分比用百分点，例如 10.5 表示 10.5%，不能输入 0.105 或字符串“10.5%”。
-- 副词条必须为实际离散档位，副词条之间不可重复；允许与主词条同名。
+1. 在上方选择或编辑权重方案。
+2. 选择 Cost 1、3 或 4，再选择主词条；主词条自动使用五星 +25 满级值，固定小词条随 Cost 自动确定。
+3. 勾选 0～5 个不同副词条，并为每条选择实际档位；副词条允许与主词条同名。百分比按百分点显示，例如 10.5 表示 10.5%。
+4. 设置目标分数及成本参数，评分和培养建议自动更新；五条副词条开满后可使用频整器分析。
 
-在项目目录执行 Python 脚本并传入示例 JSON 路径，默认只输出分数；追加 `--details` 输出贡献明细。省略输入路径时从标准输入读取 JSON。默认配置路径相对程序位置解析，不依赖运行目录。
-
-Python 接口：`EchoScorer.from_files().score(echo)`，返回含 `score`、`main_score`、`minor_score`、`sub_score`、解析后的 `cost` 和词条贡献明细的字典。
-
-示例结果取决于当前权重预设，统一按上述公式输出 0～50 分；贡献明细中的 `score` 也为对齐后的分数。
-
-非法输入在 API 中抛出 `ValueError`；命令行将错误写入标准错误并以状态码 2 退出。
+分数取决于当前权重方案，统一按上述公式对齐到 0～50 分；贡献明细中的分数也使用相同口径。
 
 ## 测试
 
-[tests/test_echo_score.py](tests/test_echo_score.py) 覆盖评分输入与命令行；[tests/test_echo_strategy.py](tests/test_echo_strategy.py) 覆盖概率区间、阈值、回收和重复尝试成本；[tests/test_echo_gui.py](tests/test_echo_gui.py) 离屏验证真实控件和后台策略。[频整器核心测试](tests/test_echo_reconstruction.py) 以独立有理数穷举验证全部锁法、收益与预算边际；[频整器界面测试](tests/test_echo_reconstruction_gui.py) 验证五按钮、结果表格、缓存和独立异步队列。使用标准库 `unittest` 的 discover 模式运行；需安装项目运行依赖。
+[tests/test_echo_score.py](tests/test_echo_score.py) 覆盖评分输入、配置和非法数据；[tests/test_echo_strategy.py](tests/test_echo_strategy.py) 覆盖概率区间、阈值、回收和重复尝试成本；[tests/test_echo_gui.py](tests/test_echo_gui.py) 离屏验证真实控件和后台策略。[频整器核心测试](tests/test_echo_reconstruction.py) 以独立有理数穷举验证全部锁法、收益与预算边际；[频整器界面测试](tests/test_echo_reconstruction_gui.py) 验证五按钮、结果表格、缓存和独立异步队列。使用标准库 `unittest` 的 discover 模式运行；需安装项目运行依赖。
+
+[tests/fixtures/echo.json](tests/fixtures/echo.json) 是评分核心测试数据，不是 GUI 输入文件。其结构与 GUI 内部输入一致，但使用中文词条名并省略可推断的 Cost；GUI 使用英文词条标识并显式传入 Cost。评分逻辑仍由 Python API 提供，应用通过 GUI 输入调用该核心。

@@ -1,11 +1,12 @@
 import copy
-import io
-import json
 import math
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
-from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, ROOT, EchoScorer, load_json, main
+from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 class EchoScorerTests(unittest.TestCase):
@@ -13,7 +14,7 @@ class EchoScorerTests(unittest.TestCase):
         self.stats = load_json(DEFAULT_STATS)
         self.weights = load_json(DEFAULT_WEIGHTS)
         self.scorer = EchoScorer(self.stats, self.weights)
-        self.echo = load_json(ROOT / "examples" / "echo.json")
+        self.echo = load_json(FIXTURES / "echo.json")
 
     def raw_maximum(self, weights=None):
         weights = self.weights if weights is None else weights
@@ -282,22 +283,6 @@ class EchoScorerTests(unittest.TestCase):
         self.weights["sub_stats"]["crit_dmg"] = 1e308
         with self.assertRaises(ValueError):
             EchoScorer(self.stats, self.weights).score(self.echo)
-
-    def test_cli_score_and_details(self):
-        for details in [False, True]:
-            output = io.StringIO()
-            args = [str(ROOT / "examples" / "echo.json")] + (["--details"] if details else [])
-            with redirect_stdout(output):
-                self.assertEqual(main(args), 0)
-            expected = self.expected_scores(self.echo)[0]
-            self.assertEqual(json.loads(output.getvalue())["score"] if details
-                             else float(output.getvalue()), expected)
-
-    def test_cli_missing_file(self):
-        with redirect_stderr(io.StringIO()) as error:
-            self.assertEqual(main([str(ROOT / "examples" / "missing.json")]), 2)
-        self.assertIn("评分失败", error.getvalue())
-
 
 if __name__ == "__main__":
     unittest.main()

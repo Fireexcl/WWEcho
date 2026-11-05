@@ -361,11 +361,9 @@ class EchoWindow(QMainWindow):
             if any(value > 1_000_000 or abs(round(value, 4) - value) > 1e-8
                    for value in self.cost_defaults.values()):
                 raise ValueError("GUI 成本默认值支持 0～1000000，最多四位小数")
-            self.cost_defaults_note = str(cost_config.get("default_weights_note", ""))
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError):
             # 成本配置不可用时仍可评分；具体策略错误由后台计算单独报告。
             self.cost_defaults = activation_defaults({})
-            self.cost_defaults_note = f"成本默认配置不可用，暂用兼容默认值：{exc}"
         self.defaults = normalize_weights(self.stats, self.defaults)
         local_presets = presets_path if presets_path is not None else weight_presets_path()
         self.preset_store = WeightPresetStore(

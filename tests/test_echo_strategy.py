@@ -174,7 +174,6 @@ class StrategyTests(unittest.TestCase):
 
     def test_default_costs_match_user_provided_requirements(self):
         steps = self.costs["steps"]
-        self.assertEqual(self.costs["status"], "user_provided")
         self.assertEqual(self.costs["recovery_ratio"], .7)
         self.assertEqual(self.costs["tuning_recovery_ratio"], .3)
         self.assertEqual(self.costs["experience_material_unit"], 500)

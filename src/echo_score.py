@@ -1,11 +1,9 @@
-"""五星满级声骸评分核心及 JSON 命令行入口（无第三方依赖）。"""
+"""五星满级声骸评分核心（无第三方依赖）。"""
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
-import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -254,24 +252,3 @@ class EchoScorer:
             "main_stat": main,
             "sub_stats": subs,
         }
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="五星 +25 声骸：主词条 + 0～5 副词条评分")
-    parser.add_argument("input", nargs="?", type=Path, help="输入 JSON 文件；省略时从标准输入读取")
-    parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="用户权重 JSON")
-    parser.add_argument("--stats", type=Path, default=DEFAULT_STATS, help="属性数据 JSON")
-    parser.add_argument("--details", action="store_true", help="输出 JSON 贡献明细（默认仅输出总分）")
-    args = parser.parse_args(argv)
-    try:
-        echo = load_json(args.input) if args.input else json.load(sys.stdin)
-        result = EchoScorer.from_files(args.stats, args.weights).score(echo)
-        print(json.dumps(result, ensure_ascii=False, indent=2) if args.details else result["score"])
-    except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
-        print(f"评分失败：{exc}", file=sys.stderr)
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
