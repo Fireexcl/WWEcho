@@ -55,9 +55,9 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(result["zero"]["success_probability"], 1)
         self.assertEqual(result["zero"]["expected_tuning"], 50)
         self.assertEqual(result["zero"]["expected_experience"], 143000)
-        self.assertAlmostEqual(result["zero"]["expected_cost"], 279.8)
+        self.assertAlmostEqual(result["zero"]["expected_cost"], 165.4)
         self.assertTrue(result["current"]["recommend_continue"])
-        self.assertAlmostEqual(result["current"]["future_cost"], 278.8)
+        self.assertAlmostEqual(result["current"]["future_cost"], 164.4)
 
     def test_base_target_reached_at_every_count_still_finishes_all_slots(self):
         stat_ids = list(self.stats["sub_stats"]["tiers"])
@@ -72,8 +72,8 @@ class StrategyTests(unittest.TestCase):
                 self.assertEqual(current["success_probability"], 1)
                 self.assertEqual(current["recommend_continue"], count < 5)
                 self.assertAlmostEqual(current["future_cost"],
-                                       (50 - count * 10) + (143000 - planner.cumulative_exp[count]) / 1000 * 1.6)
-                self.assertAlmostEqual(result["zero"]["expected_cost"], 279.8)
+                                       (50 - count * 10) + (143000 - planner.cumulative_exp[count]) / 1000 * 0.8)
+                self.assertAlmostEqual(result["zero"]["expected_cost"], 165.4)
 
     def test_zero_weights_and_zero_target_still_require_full_investment(self):
         for pool in self.weights["main_stats"].values():
@@ -83,9 +83,9 @@ class StrategyTests(unittest.TestCase):
         scorer = EchoScorer(self.stats, self.weights)
         result = ActivationPlanner(scorer, self.costs, 0, bins=100).analyze(self.echo)
         self.assertEqual(result["zero"]["success_probability"], 1)
-        self.assertAlmostEqual(result["zero"]["expected_cost"], 279.8)
+        self.assertAlmostEqual(result["zero"]["expected_cost"], 165.4)
         self.assertTrue(result["current"]["recommend_continue"])
-        self.assertAlmostEqual(result["current"]["future_cost"], 278.8)
+        self.assertAlmostEqual(result["current"]["future_cost"], 164.4)
 
     def test_unreachable_and_no_division_by_zero(self):
         result = self.planner(1000).analyze(self.echo)
@@ -148,9 +148,14 @@ class StrategyTests(unittest.TestCase):
         self.assertAlmostEqual(result["expected_cost"], result["attempt_cost"] / probability)
         weighted = self.planner(30, tuning_weight=None, experience_weight=None,
                                 embryo_weight=None).analyze(self.echo)["zero"]
-        self.assertAlmostEqual(weighted["expected_cost"], 13 + 134 + 161000 / 1000 * 1.6)
-        self.assertAlmostEqual(weighted["expected_cost"], 404.6)
-        self.assertEqual(weighted["success_probability"], result["success_probability"])
+        # 默认经验权重 0.8 时，前两条未命中再弃置比首条未命中就弃置更省。
+        self.assertAlmostEqual(weighted["success_probability"], 2 / 13)
+        self.assertAlmostEqual(weighted["expected_embryos"], 6.5)
+        self.assertAlmostEqual(weighted["expected_tuning"], 127)
+        self.assertAlmostEqual(weighted["expected_experience"], 170500)
+        self.assertAlmostEqual(weighted["expected_cost"], 6.5 + 127 + 170500 / 1000 * 0.8)
+        self.assertAlmostEqual(weighted["expected_cost"], 269.9)
+        self.assertLess(weighted["expected_cost"], 13 + 134 + 161000 / 1000 * 0.8)
 
     def test_cost_weight_defaults_use_material_drop_estimate(self):
         weights = self.costs["default_weights"]
@@ -250,13 +255,13 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(current["full_success_lower"], 1)
         self.assertEqual(current["success_probability"], 1)
         self.assertTrue(current["recommend_continue"])
-        self.assertAlmostEqual(current["future_cost"], 40 + (143000 - 4500) / 1000 * 1.6)
+        self.assertAlmostEqual(current["future_cost"], 40 + (143000 - 4500) / 1000 * 0.8)
 
     def test_optimal_policy_matches_all_single_useful_type_stopping_rules(self):
         self.weights["sub_stats"] = dict.fromkeys(self.weights["sub_stats"], 0)
         self.weights["sub_stats"]["crit_rate"] = 20 / 10.5
         self.stats["sub_stats"]["tiers"]["crit_rate"]["values"] = [10.5] * 8
-        for embryo, tuning, experience in [(1, 1, 1.6), (0, 10, 1.6),
+        for embryo, tuning, experience in [(1, 1, 0.8), (0, 10, 0.8),
                                            (0, 1, 16), (0, 0, 0), (100, 1, 0)]:
             with self.subTest(weights=(embryo, tuning, experience)):
                 planner = self.planner(30, embryo_weight=embryo,
@@ -314,10 +319,10 @@ class StrategyTests(unittest.TestCase):
     def test_default_and_weighted_cost_optima_match_verified_thousand_bin_results(self):
         scorer = EchoScorer(load_json(DEFAULT_STATS), load_json(DEFAULT_WEIGHTS))
         for embryo, tuning, experience, probability, cost, embryos, tuners, exp in [
-                (1, 1, 1.6, .03614128784982372, 954.3025182705469,
-                 27.669185562928895, 381.3536237485227, 340799.81809943455),
-                (0, 10, 1.6, .04133160244585571, 4259.280866593188,
-                 24.19456156605584, 367.6761811375314, 364074.4095111718),
+                (1, 1, 0.8, .03911561467797786, 678.6666475110733,
+                 25.565238031731642, 372.4414263037087, 350824.97896954115),
+                (0, 10, 0.8, .04196303924371878, 3965.6370394093046,
+                 23.830495074297662, 367.04415615101016, 368994.3473740041),
                 (0, 1, 16, .025955048197779984, 5663.185461633643,
                  38.52815037675534, 439.90193639891265, 326455.2203271706)]:
             with self.subTest(weights=(embryo, tuning, experience)):
@@ -349,17 +354,17 @@ class StrategyTests(unittest.TestCase):
     def test_per_thousand_weight_scales_future_cost_without_scaling_exp_output(self):
         self.echo["sub_stats"] = [{"name": "hp_flat", "value": 320}]
         current = self.planner(1000, experience_weight=None).analyze(self.echo)["current"]
-        self.assertAlmostEqual(current["future_cost"], -3000 / 1000 * 1.6 - 3)
-        self.assertAlmostEqual(current["future_cost"], -7.8)
+        self.assertAlmostEqual(current["future_cost"], -3000 / 1000 * 0.8 - 3)
+        self.assertAlmostEqual(current["future_cost"], -5.4)
 
     def test_legacy_per_point_weight_is_converted_without_changing_cost(self):
         costs = copy.deepcopy(self.costs)
         del costs["experience_weight_unit"]
-        costs["default_weights"]["experience_weight"] = .0016
+        costs["default_weights"]["experience_weight"] = .0008
         scorer = EchoScorer(self.stats, self.weights)
         legacy = ActivationPlanner(scorer, costs, 30, bins=100)
         current = ActivationPlanner(scorer, self.costs, 30, bins=100)
-        self.assertEqual(legacy.xw, 1.6)
+        self.assertEqual(legacy.xw, 0.8)
         self.assertEqual(legacy.analyze(self.echo), current.analyze(self.echo))
 
     def test_legacy_cost_config_can_use_continuous_material_quantities(self):

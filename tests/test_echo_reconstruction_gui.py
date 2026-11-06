@@ -509,12 +509,14 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertEqual([table.item(row, 0).text() for row in range(table.rowCount())],
                          ["不投入", "动态择优", "1+1+1", "1+2", "2+1", "3"])
         self.assertIn("动态换锁", self.window.reconstruction_tabs.tabText(1))
-        self.assertIn("每次洗出候选可保留或拒绝", self.window.reconstruction_hint.text())
-        self.assertIn("不是首次超过原始评分即停", self.window.reconstruction_hint.text())
+        self.assertIn("给定频整器预算", self.window.reconstruction_hint.text())
+        self.assertIn("动态方案根据实际保留状态选择最优后续锁法",
+                      self.window.reconstruction_hint.text())
         for row, attempts in ((2, "3"), (3, "2"), (4, "2"), (5, "1")):
             self.assertEqual(table.item(row, 5).text(), "3")
             self.assertEqual(table.item(row, 6).text(), attempts)
-        self.assertIn("动态", self.window.reconstruction_recommendation.text())
+        self.assertEqual(self.window.reconstruction_status.text(), "")
+        self.assertTrue(self.window.reconstruction_status.isHidden())
         self.assertNotIn("下次边际", "".join(table.horizontalHeaderItem(column).text()
                                              for column in range(table.columnCount())))
 
@@ -558,7 +560,9 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.assertTrue(all(not button.isEnabled() for button in self.window.reconstruction_lock_buttons))
         self.assertIsNone(self.window._reconstruction_result)
         self.assertEqual(self.window.reconstruction_budget_table.rowCount(), 0)
-        self.assertEqual(self.window.reconstruction_recommendation.text(), "—")
+        self.assertEqual(self.window.reconstruction_status.text(), "请先在区域 2 开满五条副词条")
+        self.assertFalse(self.window.reconstruction_status.isHidden())
+        self.assertTrue(all(label.text() == "—" for label in self.window.reconstruction_metrics.values()))
         self.window.updating = True
         self.window.sub_stat_buttons["energy_regen"].click()
         self.window.updating = False

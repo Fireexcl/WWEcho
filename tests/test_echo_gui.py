@@ -314,13 +314,9 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual([grid.itemAtPosition(0, column).widget().text() for column in range(5)],
                  ["经验回收比例", "打孔器回收比例", "打孔器权重", "每1000经验权重", "胚子权重"])
         hint = self.window.result_hint.text()
-        self.assertIn("每次 10 个打孔器", hint)
         self.assertIn("经验默认返还 70%", hint)
         self.assertIn("打孔器默认返还 30%", hint)
-        self.assertIn("余量保留", hint)
-        self.assertIn("强化和开孔不会失败", hint)
-        self.assertIn("主动弃置回收", hint)
-        self.assertIn("保留不回收", hint)
+        self.assertIn("向下取整到500实际比例略低", hint)
         self.assertNotIn("失败回收", hint)
         self.assertNotIn("占位", hint)
 
@@ -465,7 +461,7 @@ class EchoGuiTests(unittest.TestCase):
             "zero_probability": "单个胚子成功率",
             "zero_embryos": "消耗胚子",
             "zero_tuning": "消耗打孔器",
-            "zero_gold_tubes": "消耗金密音筒",
+            "zero_gold_tubes": "消耗金密音筒(5000经验)",
             "current_probability": "后续成功率",
             "current_cost": "后续平均成本",
         }
@@ -501,8 +497,7 @@ class EchoGuiTests(unittest.TestCase):
         for text in texts:
             for old in ("净", "加权", "开孔素材", "相对基准策略", "完整激活概率"):
                 self.assertNotIn(old, text)
-        self.assertIn("概率本身是固定的", self.window.result_hint.text())
-        self.assertIn("计算误差", self.window.result_hint.text())
+        self.assertIn("成功率和材料消耗可能随权重改变", self.window.result_hint.text())
         self.assertIn("估算范围", self.window.zero_strategy.text())
         self.assertIn("估算范围", self.window.current_strategy.text())
         self.assertNotIn("参考阈值", self.window.current_strategy.text())
@@ -683,12 +678,12 @@ class EchoGuiTests(unittest.TestCase):
             self.window.sub_stat_buttons[name].click()
         self.assertEqual(self.window.progress_status.text(), "达成目标")
 
-    def test_result_hint_requires_complete_five_slot_success(self):
+    def test_result_hint_explains_average_cost_strategy(self):
         hint = self.window.result_hint.text()
-        self.assertIn("达标后仍必须", hint)
-        self.assertIn("+25", hint)
-        self.assertIn("开满五条", hint)
-        self.assertIn("剩余经验和打孔器", hint)
+        self.assertIn("按当前材料权重", hint)
+        self.assertIn("比较继续培养的累计成本", hint)
+        self.assertIn("弃置回收后新胚子做到成功的累计成本", hint)
+        self.assertIn("反复尝试到一个达标成品的平均成本", hint)
 
     def test_rounded_score_cannot_mark_unreached_echo_as_completed(self):
         weights = self.window.current_weights()
@@ -1764,7 +1759,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertIn("建议放弃", self.window.current_strategy.text())
         self.assertIn("按材料权重比较累计成本", self.window.current_strategy.text())
         self.assertNotIn("参考阈值", self.window.current_strategy.text())
-        for text in ("计算误差", "修改成本权重", "重新优化", "用户提供数据", "主动弃置回收", "70%", "30%", "500"):
+        for text in ("按当前材料权重", "弃置回收", "平均成本", "70%", "30%", "500"):
             self.assertIn(text, self.window.result_hint.text())
 
     def test_strategy_error_is_visible_without_affecting_scoring(self):
@@ -1885,8 +1880,8 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
         self.assertEqual(window.current_strategy.text(),
              f"{recommendation}（按材料权重比较累计成本）"
                          f"\n原因：{current['reason']}"
-             f"\n继续培养到成功的平均成本：{continue_cost}"
-             f"\n弃置重开到成功的平均成本：{restart_cost}"
+             f"\n继续成本：{continue_cost}"
+             f"\n弃置成本：{restart_cost}"
              f"\n开完剩余词条达标概率：{current['full_success_lower']:.2%} ～ "
              f"{current['full_success_upper']:.2%}（估算范围）")
         self.assertEqual(window.strategy_status.text(),
@@ -1932,7 +1927,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assertEqual(window.strategy_metrics["zero_gold_tubes"].text(), "28.6")
             self.assertIn("开满剩余 5 条", window.current_strategy.text())
             self.assertIn("建议继续", window.current_strategy.text())
-            self.assertIn("继续成本：278.8", window.current_strategy.text())
+            self.assertIn("继续成本：164.4", window.current_strategy.text())
             self.assertNotIn("建议放弃", window.current_strategy.text())
         finally:
             window.close()
@@ -1954,15 +1949,17 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             window.main_stat.setCurrentIndex(window.main_stat.findData("crit_rate"))
             window.target.setValue(40)
             window.sub_stat_buttons["hp_flat"].click()
+            window.strategy_inputs["tuning_weight"].setValue(0)
             self.wait_for_strategy(window)
 
             first = window._strategy_cache["planner"]
             result = first.analyze(window.current_echo())
             self.assertEqual(first.bins, 1000)
+            self.assertEqual(first.xw, 0.8)
             self.assertFalse(result["current"]["recommend_continue"])
             self.assertEqual(window.progress_status.text(), "推荐放弃")
             self.assert_results_match_api(window, result)
-            self.assertAlmostEqual(result["zero"]["expected_cost"], 404.6)
+            self.assertAlmostEqual(result["zero"]["expected_cost"], 141.8)
             unchanged_score = window.score_label.text()
 
             window.strategy_inputs["tuning_weight"].setValue(10)
@@ -1975,7 +1972,7 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
             self.assertTrue(result["current"]["recommend_continue"])
             self.assertEqual(window.progress_status.text(), "推荐继续")
             self.assert_results_match_api(window, result)
-            self.assertAlmostEqual(result["zero"]["expected_cost"], 1398.88)
+            self.assertAlmostEqual(result["zero"]["expected_cost"], 1229.44)
             self.assertEqual(window.score_label.text(), unchanged_score)
             self.assertLess(result["current"]["continue_cost"], result["current"]["restart_cost"])
         finally:
