@@ -11,9 +11,8 @@ datas = [
     (str(ROOT / "config" / "activation-costs.json"), "config"),
     (str(ROOT / "config" / "echo-stats.json"), "config"),
     (str(ROOT / "config" / "score-weights.json"), "config"),
+    (str(ROOT / "weight-presets.json"), "."),
 ]
-if IS_MACOS:
-    datas.append((str(ROOT / "weight-presets.json"), "."))
 
 a = Analysis(
     [str(ROOT / "src" / "echo_gui.py")],

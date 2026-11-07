@@ -1337,40 +1337,51 @@ class EchoGuiTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
-    def test_macos_bundle_initializes_from_template_and_preserves_local_changes(self):
-        template = self.presets_path.with_name("bundle-template.json")
+    def test_frozen_app_initializes_from_template_and_preserves_local_changes(self):
+        resources = self.presets_path.parent / "bundled"
+        default_weights = resources / "config" / "score-weights.json"
+        default_weights.parent.mkdir(parents=True)
+        default_weights.write_text(json.dumps(self.window.defaults), encoding="utf-8")
+        template = resources / "weight-presets.json"
         source = WeightPresetStore(template, self.window.stats, self.window.defaults)
         weights = self.window.current_weights()
         weights["sub_stats"]["crit_rate"] = 7
         source.add("打包前保存的方案", weights)
         original = template.read_bytes()
-        destination = self.presets_path.with_name("macos-portable.json")
-        with patch("src.echo_gui.weight_presets_path", return_value=destination), \
-                patch("src.echo_gui.initial_weight_presets_path", return_value=template):
-            window = EchoWindow()
-        try:
-            self.assertEqual(window.preset_store.presets, source.presets)
-            self.assertEqual(window.preset_store.selected_id, source.selected_id)
-            self.assertEqual(window.weight_preset_combo.currentText(), "打包前保存的方案")
-            self.assertFalse(window._weights_dirty)
-            window.weight_inputs["sub_stats"]["crit_rate"].setValue(8)
-            self.assertTrue(window.save_weights())
-            self.assertEqual(template.read_bytes(), original)
-        finally:
-            window.close()
-            window.deleteLater()
-            self.app.processEvents()
-        with patch("src.echo_gui.weight_presets_path", return_value=destination), \
-                patch("src.echo_gui.initial_weight_presets_path") as initial:
-            reopened = EchoWindow()
-        try:
-            initial.assert_not_called()
-            self.assertEqual(reopened.current_weights()["sub_stats"]["crit_rate"], 8)
-            self.assertEqual(template.read_bytes(), original)
-        finally:
-            reopened.close()
-            reopened.deleteLater()
-            self.app.processEvents()
+        for platform in ("win32", "darwin"):
+            destination = self.presets_path.with_name(f"{platform}-portable.json")
+            with self.subTest(platform=platform), \
+                    patch.object(sys, "platform", platform), \
+                    patch.object(sys, "frozen", True, create=True), \
+                    patch("src.echo_gui.DEFAULT_WEIGHTS", default_weights), \
+                    patch("src.echo_gui.weight_presets_path", return_value=destination), \
+                    patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+                window = EchoWindow()
+                try:
+                    legacy.assert_not_called()
+                    self.assertEqual(window.preset_store.path, destination)
+                    self.assertEqual(window.preset_store.migrated_from, template)
+                    self.assertEqual(window.preset_store.presets, source.presets)
+                    self.assertEqual(window.preset_store.selected_id, source.selected_id)
+                    self.assertEqual(window.weight_preset_combo.currentText(), "打包前保存的方案")
+                    self.assertFalse(window._weights_dirty)
+                    window.weight_inputs["sub_stats"]["crit_rate"].setValue(8)
+                    self.assertTrue(window.save_weights())
+                    self.assertEqual(template.read_bytes(), original)
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
+                with patch("src.echo_gui.initial_weight_presets_path") as initial:
+                    reopened = EchoWindow()
+                try:
+                    initial.assert_not_called()
+                    self.assertEqual(reopened.current_weights()["sub_stats"]["crit_rate"], 8)
+                    self.assertEqual(template.read_bytes(), original)
+                finally:
+                    reopened.close()
+                    reopened.deleteLater()
+                    self.app.processEvents()
 
     def test_weight_preset_existing_local_library_does_not_query_user_directory(self):
         with patch("src.echo_gui.legacy_weight_presets_path") as legacy:

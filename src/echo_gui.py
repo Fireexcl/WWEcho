@@ -118,8 +118,8 @@ def weight_presets_path() -> Path:
 
 
 def initial_weight_presets_path() -> Path:
-    """macOS 打包版使用只读模板初始化，其他版本沿用旧版用户库迁移。"""
-    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+    """打包版使用只读模板初始化，源码版沿用旧版用户库迁移。"""
+    if getattr(sys, "frozen", False):
         template = DEFAULT_WEIGHTS.parent.parent / "weight-presets.json"
         if not template.is_file():
             raise FileNotFoundError(f"应用内置权重方案库不存在：{template}")

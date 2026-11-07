@@ -88,27 +88,48 @@ class WeightPresetPathTests(unittest.TestCase):
                 self.assertEqual(echo_gui.initial_weight_presets_path(), template)
             legacy.assert_not_called()
 
-    def test_missing_macos_template_is_reported_instead_of_using_default_weights(self):
+    def test_windows_initial_library_comes_from_embedded_resources(self):
         from src import echo_gui
 
         with TemporaryDirectory() as directory:
-            resources = Path(directory) / "missing-resources"
-            with patch.object(sys, "platform", "darwin"), \
+            root = Path(directory).resolve() / "EXE 程序"
+            resources = root.parent / "_MEI12345"
+            resources.mkdir()
+            template = resources / "weight-presets.json"
+            template.write_text("{}", encoding="utf-8")
+            with patch.object(sys, "platform", "win32"), \
                     patch.object(sys, "frozen", True, create=True), \
+                    patch.object(sys, "executable", str(root / "WWEcho声骸工作台.exe")), \
+                    patch.object(sys, "_MEIPASS", str(resources), create=True), \
                     patch.object(echo_gui, "DEFAULT_WEIGHTS", resources / "config" / "score-weights.json"), \
                     patch.object(echo_gui, "legacy_weight_presets_path") as legacy:
-                with self.assertRaisesRegex(FileNotFoundError, "应用内置权重方案库不存在"):
-                    echo_gui.initial_weight_presets_path()
+                self.assertEqual(echo_gui.initial_weight_presets_path(), template)
+                self.assertEqual(echo_gui.weight_presets_path(), root / "weight-presets.json")
             legacy.assert_not_called()
-            self.assertFalse(resources.exists())
+            self.assertFalse(root.exists())
 
-    def test_source_and_windows_initial_library_keep_legacy_migration(self):
+    def test_missing_frozen_template_is_reported_instead_of_using_default_weights(self):
         from src import echo_gui
 
-        for platform, frozen in (("darwin", False), ("win32", True), ("linux", False)):
-            with self.subTest(platform=platform, frozen=frozen), \
+        for platform in ("darwin", "win32"):
+            with self.subTest(platform=platform), TemporaryDirectory() as directory:
+                resources = Path(directory) / "missing-resources"
+                with patch.object(sys, "platform", platform), \
+                        patch.object(sys, "frozen", True, create=True), \
+                        patch.object(echo_gui, "DEFAULT_WEIGHTS", resources / "config" / "score-weights.json"), \
+                        patch.object(echo_gui, "legacy_weight_presets_path") as legacy:
+                    with self.assertRaisesRegex(FileNotFoundError, "应用内置权重方案库不存在"):
+                        echo_gui.initial_weight_presets_path()
+                legacy.assert_not_called()
+                self.assertFalse(resources.exists())
+
+    def test_source_initial_library_keeps_legacy_migration(self):
+        from src import echo_gui
+
+        for platform in ("darwin", "win32", "linux"):
+            with self.subTest(platform=platform), \
                     patch.object(sys, "platform", platform), \
-                    patch.object(sys, "frozen", frozen, create=True), \
+                    patch.object(sys, "frozen", False, create=True), \
                     patch.object(echo_gui, "legacy_weight_presets_path", return_value=Path("legacy.json")) as legacy:
                 self.assertEqual(echo_gui.initial_weight_presets_path(), Path("legacy.json"))
                 legacy.assert_called_once_with()

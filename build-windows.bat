@@ -23,14 +23,19 @@ if errorlevel 1 goto setup_failed
 if not exist "%PYTHON%" goto setup_failed
 "%PYTHON%" -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" >nul 2>&1
 if errorlevel 1 goto python_version
+if not exist "%CD%\weight-presets.json" goto presets_missing
 "%PYTHON%" -m pip install -r requirements-build.txt
 if errorlevel 1 goto install_failed
+
+"%PYTHON%" -c "from pathlib import Path; from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, load_json; from src.echo_weight_presets import WeightPresetStore; WeightPresetStore(Path('weight-presets.json'), load_json(DEFAULT_STATS), load_json(DEFAULT_WEIGHTS))"
+if errorlevel 1 goto presets_invalid
 
 "%PYTHON%" -m PyInstaller --noconfirm --clean WWEcho.spec
 if errorlevel 1 goto build_failed
 
 echo.
 echo Build complete: %CD%\dist\WWEcho声骸工作台.exe
+echo Presets are saved next to the .exe. Keep both together in a writable folder.
 pause
 exit /b 0
 
@@ -44,6 +49,14 @@ goto failed
 
 :python_version
 echo This project requires Python 3.9 or newer to build.
+goto failed
+
+:presets_missing
+echo weight-presets.json is required as the initial preset library. Run run.bat to create it, or export a library to this path.
+goto failed
+
+:presets_invalid
+echo weight-presets.json is not a valid preset library. Fix it and try again.
 goto failed
 
 :install_failed
