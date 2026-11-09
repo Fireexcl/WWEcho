@@ -41,6 +41,9 @@ QPushButton#sectionToggle:focus { border: 1px solid #9fb9ed; }
 QLabel { background: transparent; }
 QLabel#title { font-size: 30px; font-weight: 700; color: #172b4d; }
 QLabel#muted, QLabel#metricCaption { color: #65758b; font-size: 12px; }
+QLabel#weightPresetSummary { color: #65758b; font-size: 12px; font-weight: 400;
+    padding-right: 20px; }
+QLabel#weightPresetSummary[expanded="false"] { color: #2563eb; }
 QLabel#score { font-size: 52px; font-weight: 700; color: #2563eb;
               background: #edf3ff; border-radius: 12px; padding: 12px 20px; }
 QLabel#summary { font-size: 15px; padding: 8px 12px; }
@@ -76,6 +79,8 @@ QComboBox, QSpinBox, QDoubleSpinBox { background: white; border: 1px solid #ced9
 QDoubleSpinBox[weightEditor="true"][nonzero="true"],
 QComboBox#weightPreset[customWeights="true"] {
     color: #b45309; background: #fff8eb; font-weight: 600; }
+QDoubleSpinBox[weightEditor="true"][highWeight="true"] {
+    color: #b91c1c; background: #f8ddd6; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #e8effc;
                             selection-color: #1d4ed8; padding: 4px; }
 QComboBox#weightPreset QAbstractItemView {
@@ -135,11 +140,12 @@ def legacy_weight_presets_path() -> Path:
 class CollapsibleSection(QFrame):
     """仅切换内容可见性，保留控件、输入与后台任务生命周期。"""
 
-    def __init__(self, content: QGroupBox) -> None:
+    def __init__(self, content: QGroupBox, summary: QLabel | None = None) -> None:
         super().__init__()
         self.setObjectName("collapsibleSection")
         self.section_title = content.title()
         self.content = content
+        self.summary = summary
         content.setTitle("")
         content.setObjectName("sectionContent")
         layout = QVBoxLayout(self)
@@ -151,7 +157,15 @@ class CollapsibleSection(QFrame):
         self.toggle_button.setChecked(True)
         self.toggle_button.setAccessibleName(self.section_title)
         self.toggle_button.toggled.connect(self._set_expanded)
-        layout.addWidget(self.toggle_button)
+        if summary is None:
+            layout.addWidget(self.toggle_button)
+        else:
+            header = QHBoxLayout()
+            header.setContentsMargins(0, 0, 0, 0)
+            header.setSpacing(0)
+            header.addWidget(self.toggle_button)
+            header.addWidget(summary, 1)
+            layout.addLayout(header)
         layout.addWidget(content)
         self._set_expanded(True)
 
@@ -159,6 +173,11 @@ class CollapsibleSection(QFrame):
         self.toggle_button.setText(f"{'▼' if expanded else '▶'}  {self.section_title}")
         self.toggle_button.setToolTip("点击折叠此区域" if expanded else "点击展开此区域")
         self.content.setVisible(expanded)
+        if self.summary is not None:
+            self.summary.setProperty("expanded", expanded)
+            self.summary.style().unpolish(self.summary)
+            self.summary.style().polish(self.summary)
+            self.summary.update()
         self.updateGeometry()
 
 
@@ -430,10 +449,15 @@ class EchoWindow(QMainWindow):
         subtitle = QLabel("支持导入/手动权重 · 实时评分 · 开孔达标概率计算 · 频整器洗练推荐")
         subtitle.setObjectName("muted")
         layout.addWidget(subtitle)
+        self.weight_preset_summary = QLabel()
+        self.weight_preset_summary.setObjectName("weightPresetSummary")
+        self.weight_preset_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.weight_preset_summary.setWordWrap(True)
         self.sections: list[CollapsibleSection] = []
         for panel in (self._weights_panel(), self._stats_panel(),
                       self._results_panel(), self._reconstruction_panel()):
-            section = CollapsibleSection(panel)
+            section = CollapsibleSection(
+                panel, self.weight_preset_summary if not self.sections else None)
             self.sections.append(section)
             layout.addWidget(section)
         scroll.setWidget(canvas)
@@ -689,6 +713,7 @@ class EchoWindow(QMainWindow):
 
     def _refresh_weight_state(self) -> None:
         preset = self.preset_store.current
+        self.weight_preset_summary.setText(f"当前权重方案：{preset['name']}")
         self._weights_dirty = not self.preset_store.persisted or self.current_weights() != preset["weights"]
         combo = self.weight_preset_combo
         index = combo.findData(preset["id"])
@@ -705,8 +730,10 @@ class EchoWindow(QMainWindow):
         for inputs in self.weight_inputs.values():
             for box in inputs.values():
                 nonzero = box.value() != 0
-                if box.property("nonzero") != nonzero:
+                high_weight = box.value() >= 0.5
+                if box.property("nonzero") != nonzero or box.property("highWeight") != high_weight:
                     box.setProperty("nonzero", nonzero)
+                    box.setProperty("highWeight", high_weight)
                     box.style().unpolish(box)
                     box.style().polish(box)
                     box.update()
@@ -1164,7 +1191,7 @@ class EchoWindow(QMainWindow):
         if version == self._reconstruction_version:
             if error:
                 self._reconstruction_key = None
-                self.reconstruction_status.setText(f"频整器计算失败（不影响评分）：{error}")
+                self.reconstruction_status.setText(f"频整器计算失败：{error}")
                 self.reconstruction_status.setVisible(True)
             elif result is not None:
                 previous_result = self._reconstruction_result
@@ -1455,7 +1482,7 @@ class EchoWindow(QMainWindow):
             "stats": self.stats, "weights": self.current_weights(),
             "target": target, "params": params, "echo": self.current_echo(),
         }))
-        self.strategy_status.setText("策略等待后台计算（评分已更新）")
+        self.strategy_status.setText("策略等待后台计算")
         self._strategy_timer.start()
 
     def _resize_details_table(self) -> None:
@@ -1503,7 +1530,7 @@ class EchoWindow(QMainWindow):
         if version == self._strategy_version:
             if error:
                 self._update_progress_status(unavailable="推荐暂不可用")
-                self.strategy_status.setText(f"策略计算失败（不影响评分）：{error}")
+                self.strategy_status.setText(f"策略计算失败：{error}")
             elif result is not None:
                 try:
                     self._display_strategy(result)

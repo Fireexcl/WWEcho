@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 MAX_DYNAMIC_BUDGET = 6
-MAX_DYNAMIC_STATES = 1_000_000
+MAX_DYNAMIC_STATES = 2_000_000
 MAX_DYNAMIC_CACHE_BYTES = 192 * 1024**2
 _Policy = tuple
 _Tables = dict[tuple[int, ...], np.ndarray]
@@ -171,7 +171,7 @@ class AdaptiveBudgetPlanner:
             return self._table_cache[policy]
         if self._state_count > MAX_DYNAMIC_STATES:
             raise BudgetResourceError(f"动态保留/拒绝模型有 {self._state_count:,} 个状态，超过 "
-                                      f"{MAX_DYNAMIC_STATES:,} 个上限；本次不提供动态推荐，单次分析不变")
+                                      f"{MAX_DYNAMIC_STATES:,} 个上限；本次不提供动态方案推荐")
         # 多种首步花费的自由政策是对应单边政策逐状态择优，复用同一后缀。
         if len(policy) > 1:
             branches = [self._tables((edge,), cancelled) for edge in policy]
@@ -181,7 +181,7 @@ class AdaptiveBudgetPlanner:
         allocated = sum(value.nbytes for tables in self._table_cache.values() for value in tables.values())
         needed = self._state_count * 2 * np.dtype(np.longdouble).itemsize
         if allocated + needed > MAX_DYNAMIC_CACHE_BYTES:
-            raise BudgetResourceError("动态保留/拒绝缓存超过 192 MiB；请降低比较预算，单次分析不受影响")
+            raise BudgetResourceError("动态保留/拒绝缓存超过 192 MiB；请降低比较预算")
         tables = {types: np.full((2,) + tuple(len(self._scores[index]) for index in types),
                     np.inf, dtype=np.longdouble)
                   for types in self._types}

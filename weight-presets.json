@@ -123,6 +123,67 @@
                     "resonance_liberation_dmg_bonus": 0.134
                 }
             }
+        },
+        {
+            "id": "a0335f1e6d854fa7943df797c642d9d8",
+            "name": "心",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.6,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.3,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.3,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.5,
+                        "crit_dmg": 0.25,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.11,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.15,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.814,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
         }
     ]
 }

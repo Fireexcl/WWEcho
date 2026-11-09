@@ -287,6 +287,40 @@ class EchoGuiTests(unittest.TestCase):
         self.assertFalse(section.content.isHidden())
         self.assertIn("开完剩余词条达标概率", self.window.current_strategy.text())
 
+    def test_weight_preset_header_summary_style_and_collapse(self):
+        self.window.show()
+        self.app.processEvents()
+        section = self.window.sections[0]
+        summary = self.window.weight_preset_summary
+        self.assertEqual(summary.text(), f"当前权重方案：{self.window.preset_store.current['name']}")
+        self.assertEqual(summary.textFormat(), Qt.TextFormat.PlainText)
+        self.assertFalse(summary.font().bold())
+        self.assertLess(summary.font().pixelSize(), section.toggle_button.font().pixelSize())
+        self.assertGreaterEqual(summary.x(), section.toggle_button.geometry().right())
+        for expanded, color in ((True, "#65758b"), (False, "#2563eb"), (True, "#65758b")):
+            section.toggle_button.setChecked(expanded)
+            self.app.processEvents()
+            self.assertFalse(summary.isHidden())
+            self.assertEqual(summary.palette().windowText().color().name(), color)
+            self.assertFalse(summary.font().bold())
+
+    def test_weight_preset_header_summary_tracks_current_name(self):
+        original_id = self.window.preset_store.selected_id
+        summary = self.window.weight_preset_summary
+        self.window.sections[0].toggle_button.click()
+        self.add_weight_preset("新方案")
+        self.assertEqual(summary.text(), "当前权重方案：新方案")
+        with patch("src.echo_gui.QInputDialog.getText", return_value=("<角色甲 & 乙>", True)):
+            self.window.rename_weights()
+        self.assertEqual(summary.text(), "当前权重方案：<角色甲 & 乙>")
+        box = self.window.weight_inputs["sub_stats"]["crit_rate"]
+        box.setValue(box.value() + 1)
+        self.assertEqual(summary.text(), "当前权重方案：<角色甲 & 乙>")
+        self.window.weight_preset_combo.setCurrentIndex(
+            self.window.weight_preset_combo.findData(original_id))
+        self.assertEqual(summary.text(), f"当前权重方案：{self.window.preset_store.current['name']}")
+        self.assertEqual(self.window.preset_store.selected_id, original_id)
+
     def test_score_results_directly_below_target_before_strategy_parameters(self):
         layout = self.window.score_label.parentWidget().layout()
         self.assertEqual(layout.itemAt(0).widget().text(),
@@ -771,9 +805,10 @@ class EchoGuiTests(unittest.TestCase):
         saved = self.window.preset_store.current
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
         original = box.value()
+        dirty_value = 0.25 if original != 0.25 else 0.35
         for value, text, background, foreground in (
             (original, saved["name"], "#e8efff", "#2456a6"),
-            (original + 1, saved["name"] + "（有修改）", "#fff8eb", "#b45309"),
+            (dirty_value, saved["name"] + "（有修改）", "#fff8eb", "#b45309"),
             (original, saved["name"], "#e8efff", "#2456a6")):
             with self.subTest(text=text):
                 box.setValue(value)
@@ -1067,17 +1102,30 @@ class EchoGuiTests(unittest.TestCase):
         self.assertTrue(self.window.custom_weights_notice.isHidden())
         self.assertFalse(self.window.delete_weights_action.isEnabled())
 
-    def test_weight_preset_nonzero_colors_and_clear_each_page_only(self):
+    def test_weight_preset_threshold_colors_and_clear_each_page_only(self):
         self.window.show()
         self.app.processEvents()
         for index, (category, inputs) in enumerate(self.window.weight_inputs.items()):
             with self.subTest(category=category):
                 self.window.weight_tabs.setCurrentIndex(index)
                 first = next(iter(inputs.values()))
+                first.setValue(0.25)
+                self.app.processEvents()
+                self.assertTrue(first.property("nonzero"))
+                self.assertFalse(first.property("highWeight"))
+                self.assertEqual(first.palette().text().color().name(), "#b45309")
+                self.assertEqual(first.palette().base().color().name(), "#fff8eb")
+                for value, background in ((0.0001, "#fff8eb"), (0.4999, "#fff8eb"),
+                                          (0.5, "#f8ddd6"), (0, "#ffffff")):
+                    first.setValue(value)
+                    self.app.processEvents()
+                    self.assertEqual(first.palette().base().color().name(), background)
                 first.setValue(1)
                 self.app.processEvents()
                 self.assertTrue(first.property("nonzero"))
-                self.assertEqual(first.palette().text().color().name(), "#b45309")
+                self.assertTrue(first.property("highWeight"))
+                self.assertEqual(first.palette().text().color().name(), "#b91c1c")
+                self.assertEqual(first.palette().base().color().name(), "#f8ddd6")
                 other_values = {name: {stat: box.value() for stat, box in boxes.items()}
                                 for name, boxes in self.window.weight_inputs.items() if name != category}
                 button = self.window.clear_weight_buttons[category]
@@ -1093,7 +1141,8 @@ class EchoGuiTests(unittest.TestCase):
                 version = self.window._strategy_version
                 button.click()
                 self.assertEqual(self.window._strategy_version, version + 1)
-                self.assertTrue(all(box.value() == 0 and not box.property("nonzero") for box in inputs.values()))
+                self.assertTrue(all(box.value() == 0 and not box.property("nonzero")
+                                    and not box.property("highWeight") for box in inputs.values()))
                 self.assertEqual(first.palette().text().color().name(), "#243247")
                 self.assertEqual(other_values, {name: {stat: box.value() for stat, box in boxes.items()}
                                                 for name, boxes in self.window.weight_inputs.items()

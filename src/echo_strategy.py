@@ -293,8 +293,8 @@ class ActivationPlanner:
         lo, hi = min(low_score, self.bins), min(high_score, self.bins)
         count = len(raw)
         if reached:
-            completion_reason = (f"分数已达标，必须升至 +25 并开满剩余 {self.limit - count} 条"
-                                 if count < self.limit else "分数已达标且五条已开满，培养完成")
+            completion_reason = (f"分数已达标，请升至 +25 并开满剩余 {self.limit - count} 条"
+                                 if count < self.limit else "分数已达标且词条已开满，培养完成")
         if self.gap <= 0:
             # 即使仅主/小词条的满级投影已达标，也要从零投入到 +25、五条全开。
             attempt = self.ew * self.embryo + self._completion_cost(0)
@@ -364,7 +364,7 @@ class ActivationPlanner:
                     current_p = float(cp[lo])
                     future_cost = float(self._material_cost(ct[lo], cx[lo]))
                     total_cost = future_cost + (1 - current_p) * self._expected_cost
-                    reason = ("继续开，再按结果决策的平均累计成本不高于弃置重开，建议继续"
+                    reason = ("继续开下一条再决策的平均累计成本不高于弃置重开，建议继续"
                               if recommend else "弃置回收后换新胚子的平均累计成本较低，建议停止")
             current = dict(full_success_lower=full_lo, full_success_upper=full_hi,
                            success_probability=current_p,
@@ -372,6 +372,6 @@ class ActivationPlanner:
                            future_cost=future_cost, expected_total_cost=total_cost,
                            continue_cost=continue_cost, restart_cost=restart_cost)
         return dict(zero=zero, current=current, score_resolution=self.resolution,
-                    method="分数网格上下界 DP；Dinkelbach 累计成本最优停止；达标后必须开满",
+                    method="分数网格上下界 DP；Dinkelbach 累计成本最优停止",
                     optimization_converged=self._optimization_converged,
                     optimization_iterations=self._optimization_iterations)
