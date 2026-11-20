@@ -213,6 +213,20 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertEqual(len(echo["sub_stats"]), 5)
         self.assertIn("已回填词条", self.ocr.status.text())
 
+    def test_game_names_and_unique_missing_character_apply_cost_and_main(self):
+        examples = (
+            ("攻击 18%", "生命 2280", 1, "atk_pct"),
+            ("灭伤害加成 30%", "攻击 100", 3, "havoc_dmg_bonus"),
+            ("暴击伤害 44%", "攻击 150", 4, "crit_dmg"),
+        )
+        for main, minor, cost, main_id in examples:
+            with self.subTest(main=main, minor=minor):
+                self.engine.output = tokens(main, minor, "暴击率 10.5%")
+                preview = self.recognize()
+                self.confirm(preview)
+                self.assertEqual(self.window.current_echo()["cost"], cost)
+                self.assertEqual(self.window.current_echo()["main_stat"]["name"], main_id)
+
     def test_same_selection_does_not_reorder_or_recalculate(self):
         self.window.apply_ocr_sub_stats(EXAMPLE[::-1])
         version = self.ocr.input_version

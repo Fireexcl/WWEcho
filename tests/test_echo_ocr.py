@@ -1,5 +1,6 @@
 """合成 OCR 文本与坐标，无需安装本地引擎。"""
 
+import copy
 import sys
 import unittest
 from unittest.mock import patch
@@ -74,6 +75,50 @@ class EchoOcrTests(unittest.TestCase):
         self.assertEqual([(row.stat_id, row.value) for row in result.rows], [("crit_rate", 10.5)])
         self.assertEqual(result.blocking_issues, ())
         self.assertEqual(result.cost, 1)
+
+    def test_game_names_and_unique_missing_character_in_header_determine_cost(self):
+        examples = (
+            ("攻击 18%", "生命 2280", 1, "atk_pct", "hp_flat"),
+            ("灭伤害加成 30%", "攻击 100", 3, "havoc_dmg_bonus", "atk_flat"),
+            ("暴击伤害 44%", "攻击 150", 4, "crit_dmg", "atk_flat"),
+            ("防御 25.8%", "攻击 68", 3, "def_pct", "atk_flat"),
+        )
+        for main, minor, cost, main_id, minor_id in examples:
+            with self.subTest(main=main, minor=minor):
+                lines = (main, minor, "暴击率 10.5%")
+                result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], self.stats)
+                self.assertEqual(result.blocking_issues, ())
+                self.assertEqual((result.cost, result.main_stat.stat_id, result.minor_stat.stat_id),
+                                 (cost, main_id, minor_id))
+
+    def test_sub_stats_use_same_names_and_unique_missing_character_rule(self):
+        result = self.parse("生命 +320", "生命 +7.1%", "击伤害 +21%")
+        self.assertEqual([(row.stat_id, row.value) for row in result.rows],
+                         [("hp_flat", 320), ("hp_pct", 7.1), ("crit_dmg", 21)])
+
+    def test_ambiguous_missing_character_and_missing_units_do_not_guess(self):
+        lines = ("伤害加成 30%", "攻击 100", "暴击率 10.5%")
+        result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], self.stats)
+        self.assertIsNone(result.main_stat.stat_id)
+        self.assertIsNone(result.cost)
+        result = self.parse("生命", "攻击", "防御")
+        self.assertTrue(all(row.stat_id is None for row in result.rows))
+
+    def test_partial_name_is_rejected_if_two_configured_names_match(self):
+        stats = copy.deepcopy(self.stats)
+        stats["stat_definitions"]["spectro_dmg_bonus"]["name_zh"] = "衍灭伤害加成"
+        lines = ("灭伤害加成 30%", "攻击 100", "暴击率 10.5%")
+        result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], stats)
+        self.assertIsNone(result.main_stat.stat_id)
+        self.assertIsNone(result.cost)
+        self.assertTrue(result.blocking_issues)
+
+    def test_multiple_stats_on_one_line_are_blocked_with_partial_names(self):
+        for line in ("暴击率+10.5% 击伤害+21%", "暴击率+10.5% 暴击伤害"):
+            with self.subTest(line=line):
+                result = self.parse(line)
+                self.assertIn("同一识别行含有多个词条，无法验证行数。请重新截图。",
+                              result.blocking_issues)
 
     def test_detects_cost_without_requiring_intermediate_main_or_minor_values_to_be_max(self):
         result = self.parse(

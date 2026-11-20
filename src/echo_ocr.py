@@ -140,12 +140,40 @@ def _group_lines(tokens: Sequence[OcrToken]) -> list[str]:
 _NAME_VALUE = re.compile(r"([^0-9+:%.\-]*)(.*)")
 _NUMBER = re.compile(r":?\+?([0-9]+(?:\.[0-9]+)?)(%)?")
 _NAME_ALIASES = {"暴击": "crit_rate"}
-_SHARED_NAMES = {"生命": "hp_pct"}
 _UNIT_DEPENDENT_NAMES = {
+    "生命": {"flat": "hp_flat", "percentage_points": "hp_pct"},
     "攻击": {"flat": "atk_flat", "percentage_points": "atk_pct"},
     "防御": {"flat": "def_flat", "percentage_points": "def_pct"},
 }
 _NON_TARGET = ("主词条", "固定小词条", "洗炼结果", "洗练结果", "重构结果")
+
+
+def _resolve_name(label: str, number: re.Match[str] | None,
+                  definitions: dict[str, Any]) -> tuple[str | None, bool]:
+    unit_names = _UNIT_DEPENDENT_NAMES.get(label)
+    if unit_names is not None:
+        if number is None:
+            return None, True
+        return unit_names["percentage_points" if number[2] else "flat"], True
+    names = {_normalize(item["name_zh"]): stat_id for stat_id, item in definitions.items()}
+    stat_id = names.get(label, _NAME_ALIASES.get(label))
+    if stat_id is not None:
+        return stat_id, True
+    if len(label) >= 3:
+        matches = {stat_id for name, stat_id in names.items()
+                   if len(name) == len(label) + 1
+                   and any(name[:index] + name[index + 1:] == label for index in range(len(name)))}
+        if len(matches) == 1:
+            return next(iter(matches)), True
+    return None, False
+
+
+def _has_additional_stat(text: str, definitions: dict[str, Any]) -> bool:
+    for match in re.finditer(r"[0-9%]([^0-9+:%.\-]+)", text):
+        _, known = _resolve_name(match[1], _NUMBER.match(text, match.end()), definitions)
+        if known:
+            return True
+    return False
 
 
 def _equipment_stat(raw: str, pools: dict[str, dict[str, float]],
@@ -154,11 +182,10 @@ def _equipment_stat(raw: str, pools: dict[str, dict[str, float]],
     if parts is None:
         return ParsedEquipmentStat(None, None, raw)
     label, number_text = parts.groups()
-    stat_id = next((stat_id for pool in pools.values() for stat_id in pool
-                    if _normalize(definitions[stat_id]["name_zh"]) == label), None)
-    if stat_id is None:
-        return ParsedEquipmentStat(None, None, raw)
     number = _NUMBER.fullmatch(number_text)
+    stat_id, _ = _resolve_name(label, number, definitions)
+    if stat_id is None or not any(stat_id in pool for pool in pools.values()):
+        return ParsedEquipmentStat(None, None, raw)
     if number is None:
         return ParsedEquipmentStat(stat_id, None, raw)
     value = float(Decimal(number[1]))
@@ -184,14 +211,10 @@ def _matching_upgrade_steps(value: float, stat_id: str, pool: dict[str, float],
 def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrResult:
     tiers = stats["sub_stats"]["tiers"]
     definitions = stats["stat_definitions"]
-    names = {_normalize(definitions[key]["name_zh"]): key for key in tiers}
     main_pools = stats["main_stats"]["max_values_by_cost"]
     minor_pools = stats["minor_stats"]["max_values_by_cost"]
     out_of_scope = {_normalize(item["name_zh"]) for key, item in definitions.items()
                     if key not in tiers}
-    labels = sorted(set(names) | set(_NAME_ALIASES) | set(_SHARED_NAMES) |
-                    set(_UNIT_DEPENDENT_NAMES), key=len, reverse=True)
-    label_after_value = re.compile(r"[0-9%](?:" + "|".join(map(re.escape, labels)) + r")")
     rows = []
     unmatched = []
     blocking = []
@@ -244,6 +267,8 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             blocking.append("Cost 无法仅凭词条名称与当前过程值唯一判定，请补充可区分的截图。")
 
     for index, raw in enumerate(raw_lines):
+        if _has_additional_stat(_normalize(raw), definitions):
+            blocking.append("同一识别行含有多个词条，无法验证行数。请重新截图。")
         if index < 2:
             continue
         text = _normalize(raw)
@@ -257,30 +282,22 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
                 blocking.append("检测到非副词条页面内容，请重新框选。")
             unmatched.append(raw)
             continue
-        if label_after_value.search(text):
-            blocking.append("同一识别行含有多个词条，无法验证行数。请重新截图。")
         number = _NUMBER.fullmatch(number_text)
-        stat_id = names.get(label, _NAME_ALIASES.get(label))
-        percent_id = _SHARED_NAMES.get(label)
-        unit_dependent_ids = _UNIT_DEPENDENT_NAMES.get(label)
-        if stat_id is None and percent_id is None and unit_dependent_ids is None:
+        stat_id, known = _resolve_name(label, number, definitions)
+        if not known:
             unmatched.append(raw)
             if number is not None or (label and ("+" in number_text or "%" in number_text)):
                 rows.append(ParsedSubStat(None, None, raw, ("词条名未匹配，请核对原图。",)))
             continue
+        if stat_id is None:
+            has_known_name = True
+            rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
+            continue
+        if stat_id not in tiers:
+            blocking.append("检测到非副词条页面内容，请重新框选。")
+            unmatched.append(raw)
+            continue
         has_known_name = True
-        if unit_dependent_ids is not None:
-            if number is None:
-                rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
-                continue
-            stat_id = unit_dependent_ids["percentage_points" if number[2] else "flat"]
-        elif percent_id is not None:
-            # 共享名称只有读到明确的百分号才可归入百分比，不能根据整数或档位猜类型。
-            if number is None or not number[2] or percent_id not in tiers:
-                rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
-                continue
-            stat_id = percent_id
-        assert stat_id is not None
         value = None
         if number is None:
             issues = ("数值缺失或格式无法识别，请核对档位。",)
