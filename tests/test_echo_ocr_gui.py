@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject, QSaveFile, Qt, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from src.echo_capture import CaptureError, CaptureRegion, CaptureSnapshot, Rect, ScreenInfo
 from src.echo_gui import EchoWindow
@@ -226,6 +226,57 @@ class EchoOcrGuiTests(unittest.TestCase):
                 self.confirm(preview)
                 self.assertEqual(self.window.current_echo()["cost"], cost)
                 self.assertEqual(self.window.current_echo()["main_stat"]["name"], main_id)
+
+    def test_numeric_tier_resolves_fuzzy_crit_rate_in_preview(self):
+        self.engine.output = tokens("暴击伤害 44%", "攻击 150", "暴擊 10.5%")
+        preview = self.recognize()
+        self.assertEqual(preview.rows[0][1].currentData(), "crit_rate")
+        self.assertEqual(preview.rows[0][2].currentData(), 10.5)
+        self.confirm(preview)
+        self.assertEqual(self.window.current_echo()["sub_stats"],
+                         [{"name": "crit_rate", "value": 10.5}])
+
+    def test_ambiguous_header_and_unrecognized_sub_stat_can_be_corrected_in_preview(self):
+        self.engine.output = tokens("伤害加成 30%", "攻击 100", "无法辨认 21%")
+        preview = self.recognize()
+        self.assertFalse(preview.confirm.isEnabled())
+        preview.main_choice.setCurrentIndex(preview.main_choice.findData("havoc_dmg_bonus"))
+        self.assertEqual(preview.cost_choice.currentData(), 3)
+        self.assertNotIn("未识别到第一行主词条", preview.notice.text())
+        _, stat, tier = preview.rows[0]
+        stat.setCurrentIndex(stat.findData("crit_dmg"))
+        tier.setCurrentIndex(tier.findData(21))
+        self.confirm(preview)
+        echo = self.window.current_echo()
+        self.assertEqual(echo["cost"], 3)
+        self.assertEqual(echo["main_stat"]["name"], "havoc_dmg_bonus")
+        self.assertEqual(echo["sub_stats"], [{"name": "crit_dmg", "value": 21}])
+
+    def test_selecting_cost_updates_incompatible_fixed_minor_stat(self):
+        preview = self.recognize()
+        preview.cost_choice.setCurrentIndex(preview.cost_choice.findData(1))
+        self.assertEqual(preview.minor_choice.currentData(), "hp_flat")
+        self.assertFalse(preview.confirm.isEnabled())
+        preview.main_choice.setCurrentIndex(preview.main_choice.findData("atk_pct"))
+        self.confirm(preview)
+        self.assertEqual(self.window.current_echo()["cost"], 1)
+
+    def test_preview_scales_screenshot_and_manual_tab_stays_top_aligned(self):
+        preview = self.recognize()
+        picture = preview.findChild(QScrollArea).widget()
+        self.assertEqual((picture.pixmap().width(), picture.pixmap().height()), (8, 5))
+        manual = self.window.sub_stat_tabs.widget(0)
+        self.window.sub_stat_tabs.setCurrentWidget(manual)
+        self.app.processEvents()
+        options = self.window.sub_options_layout
+        top_before = options.itemAt(0).widget().geometry().top()
+        manual.resize(manual.width(), manual.height() + 500)
+        self.app.processEvents()
+        top = options.itemAt(0).widget().geometry().top()
+        bottom = options.itemAt(options.count() - 1).widget().geometry().bottom()
+        self.assertEqual(top, top_before)
+        self.assertGreater(manual.height() - bottom, 100)
+        self.assertLess(bottom - top, 400)
 
     def test_same_selection_does_not_reorder_or_recalculate(self):
         self.window.apply_ocr_sub_stats(EXAMPLE[::-1])

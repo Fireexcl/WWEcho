@@ -850,6 +850,7 @@ class EchoWindow(QMainWindow):
         for column in range(3):
             options.setColumnStretch(column, 1)
         manual_layout.addLayout(options)
+        manual_layout.addStretch()
         self.sub_stat_tabs.addTab(manual_page, "点击选择词条")
         self.sub_stat_tabs.addTab(self.ocr.panel, "截图识别")
         self.ocr.preview_ready.connect(

@@ -96,11 +96,55 @@ class EchoOcrTests(unittest.TestCase):
         self.assertEqual([(row.stat_id, row.value) for row in result.rows],
                          [("hp_flat", 320), ("hp_pct", 7.1), ("crit_dmg", 21)])
 
+    def test_fuzzy_names_handle_multiple_missing_characters_and_misread_characters(self):
+        for main in ("湮灭加成 30%", "湮灭 30%"):
+            with self.subTest(main=main):
+                lines = (main, "攻击 100", "暴击伤書 21%", "共鳴效率 12.4%")
+                result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], self.stats)
+                self.assertEqual(result.cost, 3)
+                self.assertEqual(result.main_stat.stat_id, "havoc_dmg_bonus")
+                self.assertEqual([(row.stat_id, row.value) for row in result.rows],
+                                 [("crit_dmg", 21), ("energy_regen", 12.4)])
+                self.assertTrue(result.review_issues)
+
+    def test_numeric_tiers_disambiguate_fuzzy_sub_stat_names(self):
+        result = self.parse("暴擊 10.5%", "暴击伤書 21%", "伤害加成 8.6%")
+        self.assertEqual([(row.stat_id, row.value) for row in result.rows[:2]],
+                         [("crit_rate", 10.5), ("crit_dmg", 21)])
+        self.assertIsNone(result.rows[2].stat_id)
+        self.assertFalse(result.blocking_issues)
+
+    def test_numeric_tier_can_override_a_closer_fuzzy_name(self):
+        result = self.parse("暴击伤書 10.5%")
+        self.assertEqual((result.rows[0].stat_id, result.rows[0].value), ("crit_rate", 10.5))
+        self.assertTrue(result.rows[0].issues)
+
+    def test_fuzzy_name_with_incompatible_value_does_not_guess(self):
+        result = self.parse("共鸣解放伤害加 10.5%", "暴击率 105%")
+        self.assertIsNone(result.rows[0].stat_id)
+        self.assertEqual((result.rows[1].stat_id, result.rows[1].value), ("crit_rate", None))
+
+    def test_header_name_ambiguity_can_use_intermediate_value(self):
+        result = self.parse("伤害 8.8%", "固定攻击 30", "暴击率 10.5%")
+        self.assertEqual(result.main_stat.stat_id, "crit_dmg")
+        self.assertEqual(result.cost, 4)
+
+    def test_cost_one_fuzzy_header_does_not_assume_unverified_upgrade_steps(self):
+        result = self.parse("攻击 18%", "固定生 2000", "暴击率 10.5%")
+        self.assertEqual((result.minor_stat.stat_id, result.cost), ("hp_flat", 1))
+
+    def test_unrecognized_sub_stat_can_be_corrected_without_new_screenshot(self):
+        result = self.parse("无法辨认+21%")
+        self.assertEqual(len(result.rows), 1)
+        self.assertIsNone(result.rows[0].stat_id)
+        self.assertFalse(result.blocking_issues)
+
     def test_ambiguous_missing_character_and_missing_units_do_not_guess(self):
-        lines = ("伤害加成 30%", "攻击 100", "暴击率 10.5%")
-        result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], self.stats)
-        self.assertIsNone(result.main_stat.stat_id)
-        self.assertIsNone(result.cost)
+        for main in ("伤害加成 30%", "共鸣 30%"):
+            lines = (main, "攻击 100", "暴击率 10.5%")
+            result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)], self.stats)
+            self.assertIsNone(result.main_stat.stat_id)
+            self.assertIsNone(result.cost)
         result = self.parse("生命", "攻击", "防御")
         self.assertTrue(all(row.stat_id is None for row in result.rows))
 
@@ -114,7 +158,8 @@ class EchoOcrTests(unittest.TestCase):
         self.assertTrue(result.blocking_issues)
 
     def test_multiple_stats_on_one_line_are_blocked_with_partial_names(self):
-        for line in ("暴击率+10.5% 击伤害+21%", "暴击率+10.5% 暴击伤害"):
+        for line in ("暴击率+10.5% 击伤害+21%", "暴击率+10.5% 暴击伤害",
+                     "暴击率+10.5% 伤害加成+21%"):
             with self.subTest(line=line):
                 result = self.parse(line)
                 self.assertIn("同一识别行含有多个词条，无法验证行数。请重新截图。",
@@ -184,9 +229,9 @@ class EchoOcrTests(unittest.TestCase):
         self.assertIn("百分比不明确", result.rows[5].issues[0])
 
     def test_retains_unmatched_text_and_does_not_snap_to_nearby_tier(self):
-        result = self.parse("副词条", "暴击率 +105%", "暴击伤書 +21.0%", "共鸣效率 +12.4001%", "未解锁")
+        result = self.parse("副词条", "暴击率 +105%", "无法辨认 +21.0%", "共鸣效率 +12.4001%", "未解锁")
         self.assertEqual(result.completeness, Completeness.NEEDS_REVIEW)
-        self.assertEqual(result.unmatched_text, ("副词条", "暴击伤書 +21.0%", "未解锁"))
+        self.assertEqual(result.unmatched_text, ("副词条", "无法辨认 +21.0%", "未解锁"))
         self.assertTrue(all(row.value is None for row in result.rows))
         self.assertIn("小数点", result.rows[0].issues[0])
         self.assertIsNone(result.rows[1].stat_id)
@@ -202,7 +247,7 @@ class EchoOcrTests(unittest.TestCase):
         result = self.parse("暴击率+10.5%", "暴击率+10.5%")
         self.assertEqual(result.completeness, Completeness.NEEDS_REVIEW)
         self.assertIn("重复", result.rows[1].issues[0])
-        for rows in ((), ("未解锁",), ("暴击伤書+21%",), ("主词条", "暴击率+10.5%"),
+        for rows in ((), ("未解锁",), ("主词条", "暴击率+10.5%"),
                      ("重构结果", "暴击率+10.5%"), ("暴击率+10.5% 暴击伤害+21%",),
                  ("暴击率+10.5%", "暴击伤害+21%", "共鸣效率+12.4%", "固定攻击+40",
                   "固定防御+50", "生命百分比+7.1%"),

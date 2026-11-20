@@ -7,6 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
+from difflib import SequenceMatcher
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -50,6 +51,7 @@ class ParsedEquipmentStat:
     stat_id: str | None
     value: float | None
     raw_text: str
+    issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,7 @@ class OcrResult:
     minor_stat: ParsedEquipmentStat | None = None
     cost: int | None = None
     confidence: float | None = None
+    header_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,28 +152,52 @@ _NON_TARGET = ("主词条", "固定小词条", "洗炼结果", "洗练结果", "
 
 
 def _resolve_name(label: str, number: re.Match[str] | None,
-                  definitions: dict[str, Any]) -> tuple[str | None, bool]:
+                  definitions: dict[str, Any],
+                  value_candidates: set[str] | None = None) -> tuple[str | None, bool, bool]:
     unit_names = _UNIT_DEPENDENT_NAMES.get(label)
     if unit_names is not None:
         if number is None:
-            return None, True
-        return unit_names["percentage_points" if number[2] else "flat"], True
+            return None, True, False
+        return unit_names["percentage_points" if number[2] else "flat"], True, False
     names = {_normalize(item["name_zh"]): stat_id for stat_id, item in definitions.items()}
     stat_id = names.get(label, _NAME_ALIASES.get(label))
     if stat_id is not None:
-        return stat_id, True
-    if len(label) >= 3:
-        matches = {stat_id for name, stat_id in names.items()
-                   if len(name) == len(label) + 1
-                   and any(name[:index] + name[index + 1:] == label for index in range(len(name)))}
-        if len(matches) == 1:
-            return next(iter(matches)), True
-    return None, False
+        return stat_id, True, False
+    if len(label) >= 2:
+        names.update(_NAME_ALIASES)
+        if number is not None:
+            unit = "percentage_points" if number[2] else "flat"
+            names.update({name: ids[unit] for name, ids in _UNIT_DEPENDENT_NAMES.items()})
+        scores: dict[str, float] = {}
+        contained = set()
+        threshold = 0.5 if value_candidates is not None else 0.6
+        for name, candidate in names.items():
+            similarity = SequenceMatcher(None, label, name).ratio()
+            if label in name:
+                contained.add(candidate)
+            if label in name or similarity >= threshold:
+                scores[candidate] = max(scores.get(candidate, 0), similarity)
+        if not scores:
+            return None, False, False
+        if value_candidates is not None:
+            scores = {candidate: score for candidate, score in scores.items()
+                      if candidate in value_candidates}
+            if not scores:
+                return None, True, True
+            contained &= scores.keys()
+        if contained:
+            scores = {candidate: scores[candidate] for candidate in contained}
+        best = max(scores.values(), default=0)
+        matches = [candidate for candidate, score in scores.items() if score == best]
+        if len(matches) == 1 and (len(scores) == 1 or best >= 0.8 or not contained):
+            return matches[0], True, True
+        return None, True, True
+    return None, False, False
 
 
 def _has_additional_stat(text: str, definitions: dict[str, Any]) -> bool:
     for match in re.finditer(r"[0-9%]([^0-9+:%.\-]+)", text):
-        _, known = _resolve_name(match[1], _NUMBER.match(text, match.end()), definitions)
+        _, known, _ = _resolve_name(match[1], _NUMBER.match(text, match.end()), definitions)
         if known:
             return True
     return False
@@ -183,16 +210,26 @@ def _equipment_stat(raw: str, pools: dict[str, dict[str, float]],
         return ParsedEquipmentStat(None, None, raw)
     label, number_text = parts.groups()
     number = _NUMBER.fullmatch(number_text)
-    stat_id, _ = _resolve_name(label, number, definitions)
+    candidates = None
+    if number is not None:
+        value = float(Decimal(number[1]))
+        candidates = {
+            stat_id for cost, pool in pools.items() for stat_id in pool
+            if bool(number[2]) == (definitions[stat_id]["unit"] == "percentage_points")
+            and ((cost == "1" and value <= pool[stat_id])
+                 or (cost != "1" and _matching_upgrade_steps(value, stat_id, pool, definitions)))
+        }
+    stat_id, _, fuzzy = _resolve_name(label, number, definitions, candidates)
     if stat_id is None or not any(stat_id in pool for pool in pools.values()):
         return ParsedEquipmentStat(None, None, raw)
+    issues = ("名称为模糊匹配，请核对。",) if fuzzy else ()
     if number is None:
-        return ParsedEquipmentStat(stat_id, None, raw)
+        return ParsedEquipmentStat(stat_id, None, raw, issues)
     value = float(Decimal(number[1]))
     expected_percent = definitions[stat_id]["unit"] == "percentage_points"
     if bool(number[2]) != expected_percent:
-        return ParsedEquipmentStat(stat_id, None, raw)
-    return ParsedEquipmentStat(stat_id, value, raw)
+        return ParsedEquipmentStat(stat_id, None, raw, issues)
+    return ParsedEquipmentStat(stat_id, value, raw, issues)
 
 
 def _matching_upgrade_steps(value: float, stat_id: str, pool: dict[str, float],
@@ -218,14 +255,14 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
     rows = []
     unmatched = []
     blocking = []
+    header_issues = []
     raw_lines = tuple(_group_lines(tokens))
-    has_known_name = False
     main_stat = _equipment_stat(raw_lines[0], main_pools, definitions) if raw_lines else None
     minor_stat = _equipment_stat(raw_lines[1], minor_pools, definitions) if len(raw_lines) > 1 else None
     if main_stat is None or main_stat.stat_id is None:
-        blocking.append("未识别到第一行主词条，请重新框选主词条、固定小词条和副词条。")
+        header_issues.append("未识别到第一行主词条，请手动选择。")
     if minor_stat is None or minor_stat.stat_id is None:
-        blocking.append("未识别到第二行固定小词条，请重新框选主词条、固定小词条和副词条。")
+        header_issues.append("未识别到第二行固定小词条，请手动选择。")
 
     cost = None
     if (main_stat is not None and main_stat.stat_id is not None
@@ -260,11 +297,11 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             cost = int(next(iter(candidates)))
         elif not candidates:
             if name_candidates:
-                blocking.append("主词条或固定小词条数值不符合 Cost 升级档位，请核对截图。")
+                header_issues.append("主词条或固定小词条数值不符合 Cost 升级档位，请手动选择。")
             else:
-                blocking.append("主词条与固定小词条组合不属于配置中的 Cost，请核对截图。")
+                header_issues.append("主词条与固定小词条组合不属于配置中的 Cost，请手动选择。")
         else:
-            blocking.append("Cost 无法仅凭词条名称与当前过程值唯一判定，请补充可区分的截图。")
+            header_issues.append("Cost 无法仅凭词条名称与当前过程值唯一判定，请手动选择。")
 
     for index, raw in enumerate(raw_lines):
         if _has_additional_stat(_normalize(raw), definitions):
@@ -283,21 +320,29 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             unmatched.append(raw)
             continue
         number = _NUMBER.fullmatch(number_text)
-        stat_id, known = _resolve_name(label, number, definitions)
+        candidates = None
+        if number is not None:
+            numeric = Decimal(number[1])
+            candidates = {
+                stat_id for stat_id, tier in tiers.items()
+                if bool(number[2]) == (definitions[stat_id]["unit"] == "percentage_points")
+                and any(Decimal(str(value)) == numeric for value in tier["values"])
+            }
+        stat_id, known, fuzzy = _resolve_name(label, number, definitions, candidates)
         if not known:
             unmatched.append(raw)
             if number is not None or (label and ("+" in number_text or "%" in number_text)):
                 rows.append(ParsedSubStat(None, None, raw, ("词条名未匹配，请核对原图。",)))
             continue
         if stat_id is None:
-            has_known_name = True
-            rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
+            issue = ("名称与数值无法唯一匹配，请手动选择。" if fuzzy
+                     else "固定值／百分比不明确，请手动选择。")
+            rows.append(ParsedSubStat(None, None, raw, (issue,)))
             continue
         if stat_id not in tiers:
             blocking.append("检测到非副词条页面内容，请重新框选。")
             unmatched.append(raw)
             continue
-        has_known_name = True
         value = None
         if number is None:
             issues = ("数值缺失或格式无法识别，请核对档位。",)
@@ -307,6 +352,8 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             numeric = Decimal(number[1])
             value = next((v for v in tiers[stat_id]["values"] if Decimal(str(v)) == numeric), None)
             issues = () if value is not None else ("不属于配置档位，请核对数值与小数点。",)
+        if fuzzy:
+            issues += ("名称为模糊匹配，请核对。",)
         rows.append(ParsedSubStat(stat_id, value, raw, issues))
 
     seen = set()
@@ -318,16 +365,21 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             seen.add(row.stat_id)
     if len(rows) > OCR_MAX_STATS:
         blocking.append(f"检测到 {len(rows)} 个副词条行；最多只能导入 {OCR_MAX_STATS} 条。")
-    if not has_known_name:
-        blocking.append("没有识别到可用的副词条名称；零条、非目标页面或不可识别画面均不能导入。")
+    if not rows:
+        blocking.append("没有识别到副词条行；零条、非目标页面或不可识别画面均不能导入。")
     review = []
     if unmatched:
         review.append("存在未匹配文字，请核对原图与框选范围。")
+    if any(item is not None and item.issues for item in (main_stat, minor_stat)) or any(
+            "名称为模糊匹配，请核对。" in row.issues for row in rows):
+        review.append("存在名称模糊匹配，请核对识别结果。")
+    blocking = header_issues + blocking
     confidences = [token.confidence for token in tokens if token.text.strip()]
     return OcrResult(tuple(rows), raw_lines, tuple(unmatched),
                      Completeness.BLOCKED if blocking else Completeness.NEEDS_REVIEW,
                      tuple(dict.fromkeys(blocking)), tuple(review), main_stat, minor_stat, cost,
-                     math.fsum(confidences) / len(confidences) if confidences else None)
+                     math.fsum(confidences) / len(confidences) if confidences else None,
+                     tuple(header_issues))
 
 
 class LocalOcrEngine:

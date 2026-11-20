@@ -168,22 +168,45 @@ class OcrPreview(QWidget):
         hint = QLabel("识别到的主词条、固定小词条、Cost 和副词条将一起回填；识别到五条副词条时会按开满状态评分。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        header = result.main_stat, result.minor_stat
-        main_name = (stats["stat_definitions"][header[0].stat_id]["name_zh"]
-                     if header[0] is not None and header[0].stat_id is not None else "未识别")
-        minor_name = (stats["stat_definitions"][header[1].stat_id]["name_zh"]
-                      if header[1] is not None and header[1].stat_id is not None else "未识别")
-        self.summary = QLabel(
-            f"Cost {result.cost if result.cost is not None else '未判定'} · "
-            f"主词条 {main_name} · 固定小词条 {minor_name} · "
-            f"副词条 {len(result.rows)} 条"
-            + (f" · 平均置信度 {result.confidence:.0%}" if result.confidence is not None else ""))
+        self.summary = QLabel()
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.summary)
+        choices = QGridLayout()
+        self.cost_choice = QComboBox()
+        self.cost_choice.addItem("请选择 Cost", None)
+        for cost in stats["main_stats"]["max_values_by_cost"]:
+            self.cost_choice.addItem(f"Cost {cost}", int(cost))
+        if result.cost is not None:
+            self.cost_choice.setCurrentIndex(self.cost_choice.findData(result.cost))
+        self.main_choice = QComboBox()
+        self.main_choice.addItem("请选择主词条", None)
+        main_ids = dict.fromkeys(
+            stat_id for pool in stats["main_stats"]["max_values_by_cost"].values() for stat_id in pool)
+        for stat_id in main_ids:
+            self.main_choice.addItem(stats["stat_definitions"][stat_id]["name_zh"], stat_id)
+        if result.main_stat is not None and result.main_stat.stat_id is not None:
+            self.main_choice.setCurrentIndex(self.main_choice.findData(result.main_stat.stat_id))
+        self.minor_choice = QComboBox()
+        self.minor_choice.addItem("请选择固定小词条", None)
+        minor_ids = dict.fromkeys(
+            stat_id for pool in stats["minor_stats"]["max_values_by_cost"].values() for stat_id in pool)
+        for stat_id in minor_ids:
+            self.minor_choice.addItem(stats["stat_definitions"][stat_id]["name_zh"], stat_id)
+        if result.minor_stat is not None and result.minor_stat.stat_id is not None:
+            self.minor_choice.setCurrentIndex(self.minor_choice.findData(result.minor_stat.stat_id))
+        for column, (name, widget) in enumerate((
+                ("Cost", self.cost_choice), ("主词条", self.main_choice),
+                ("固定小词条", self.minor_choice))):
+            choices.addWidget(QLabel(name), 0, column)
+            choices.addWidget(widget, 1, column)
+        layout.addLayout(choices)
         evidence = QHBoxLayout()
         picture = QLabel()
-        picture.setPixmap(QPixmap.fromImage(snapshot.qimage()))
+        image = QPixmap.fromImage(snapshot.qimage())
+        picture.setPixmap(image.scaled(
+            max(1, round(image.width() * 0.8)), max(1, round(image.height() * 0.8)),
+            Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation))
         picture.adjustSize()
         scroll = QScrollArea()
         scroll.setWidget(picture)
@@ -194,7 +217,9 @@ class OcrPreview(QWidget):
         self.raw.setPlainText("\n".join(result.raw_lines) or "（未识别到文字）")
         evidence.addWidget(self.raw, 2)
         layout.addLayout(evidence, 1)
-        messages = result.blocking_issues + result.review_issues
+        self._structural_issues = tuple(issue for issue in result.blocking_issues
+                                        if issue not in result.header_issues)
+        messages = self._structural_issues + result.header_issues + result.review_issues
         notice_text = "\n".join(messages) if messages else (
             f"识别到 {len(result.rows)} 条副词条；将按识别数量回填，可在下方校正词条或档位。")
         notice = QLabel(notice_text)
@@ -205,7 +230,7 @@ class OcrPreview(QWidget):
         grid = QGridLayout()
         layout.addLayout(grid)
         self.rows: list[tuple[QLabel, QComboBox, QComboBox]] = []
-        if not result.blocking_issues:
+        if not self._structural_issues:
             for index, row in enumerate(result.rows):
                 label = QLabel(" · ".join((row.raw_text, *row.issues)))
                 label.setWordWrap(True)
@@ -242,6 +267,28 @@ class OcrPreview(QWidget):
         layout.addLayout(buttons)
         self.confirm.clicked.connect(self.accept)
         self.cancel_button.clicked.connect(self.cancel)
+        self.cost_choice.currentIndexChanged.connect(self._change_cost)
+        self.main_choice.currentIndexChanged.connect(self._change_header_stat)
+        self.minor_choice.currentIndexChanged.connect(self._change_header_stat)
+        self._update_confirm()
+
+    def _change_cost(self) -> None:
+        cost = self.cost_choice.currentData()
+        if cost is not None:
+            pool = self._stats["minor_stats"]["max_values_by_cost"][str(cost)]
+            if self.minor_choice.currentData() not in pool:
+                self.minor_choice.setCurrentIndex(self.minor_choice.findData(next(iter(pool))))
+        self._update_confirm()
+
+    def _change_header_stat(self) -> None:
+        main, minor = self.main_choice.currentData(), self.minor_choice.currentData()
+        if self.cost_choice.currentData() is None and main is not None and minor is not None:
+            main_pools = self._stats["main_stats"]["max_values_by_cost"]
+            minor_pools = self._stats["minor_stats"]["max_values_by_cost"]
+            candidates = [int(cost) for cost, pool in main_pools.items()
+                          if main in pool and minor in minor_pools[cost]]
+            if len(candidates) == 1:
+                self.cost_choice.setCurrentIndex(self.cost_choice.findData(candidates[0]))
         self._update_confirm()
 
     def _refresh_tiers(self, index: int) -> None:
@@ -263,12 +310,16 @@ class OcrPreview(QWidget):
     def selection(self) -> OcrSelection:
         if self._invalidated:
             raise ValueError("输入或识别区已变更，请取消后重新识别。")
-        if self.result_data.blocking_issues:
+        if self._structural_issues:
             raise ValueError("请重新截图或调整识别区域。")
-        if self.result_data.cost is None or self.result_data.main_stat is None \
-                or self.result_data.main_stat.stat_id is None \
-                or self.result_data.minor_stat is None or self.result_data.minor_stat.stat_id is None:
-            raise ValueError("Cost、主词条或固定小词条未识别，请重新截图。")
+        cost = self.cost_choice.currentData()
+        main = self.main_choice.currentData()
+        minor = self.minor_choice.currentData()
+        if cost is None or main is None or minor is None:
+            raise ValueError("请选择未确定的 Cost、主词条和固定小词条。")
+        if main not in self._stats["main_stats"]["max_values_by_cost"][str(cost)] \
+                or minor not in self._stats["minor_stats"]["max_values_by_cost"][str(cost)]:
+            raise ValueError("主词条或固定小词条与 Cost 不匹配，请重新选择。")
         if not 1 <= len(self.rows) <= OCR_MAX_STATS:
             raise ValueError(f"OCR 必须识别到 1～{OCR_MAX_STATS} 条副词条。")
         entries = []
@@ -278,10 +329,28 @@ class OcrPreview(QWidget):
                 raise ValueError(f"请校正第 {index} 条的词条和档位。")
             entries.append(SubStatEntry(stat_id, value))
         entries = validate_selection(entries, self._stats)
-        return OcrSelection(self.result_data.cost, self.result_data.main_stat.stat_id,
-                            self.result_data.minor_stat.stat_id, entries)
+        return OcrSelection(cost, main, minor, entries)
 
     def _update_confirm(self) -> None:
+        cost = self.cost_choice.currentData()
+        main, minor = self.main_choice.currentData(), self.minor_choice.currentData()
+        definitions = self._stats["stat_definitions"]
+        confidence = self.result_data.confidence
+        self.summary.setText(
+            f"Cost {cost if cost is not None else '未判定'} · "
+            f"主词条 {definitions[main]['name_zh'] if main is not None else '未识别'} · "
+            f"固定小词条 {definitions[minor]['name_zh'] if minor is not None else '未识别'} · "
+            f"副词条 {len(self.result_data.rows)} 条"
+            + (f" · 平均置信度 {confidence:.0%}" if confidence is not None else ""))
+        if not self._invalidated:
+            header_valid = (cost is not None and main is not None and minor is not None
+                            and main in self._stats["main_stats"]["max_values_by_cost"][str(cost)]
+                            and minor in self._stats["minor_stats"]["max_values_by_cost"][str(cost)])
+            messages = (self._structural_issues
+                        + (() if header_valid else self.result_data.header_issues)
+                        + self.result_data.review_issues)
+            self.notice.setText("\n".join(messages) if messages else
+                                f"识别到 {len(self.result_data.rows)} 条副词条；可在下方校正。")
         try:
             self.selection()
         except ValueError as exc:
