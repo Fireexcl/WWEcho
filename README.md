@@ -24,6 +24,18 @@ WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算�
 - 五条副词条开满后，可锁定 1～4 条并分析其余词条重构后的升分概率与收益。
 - 比较给定预算下的指定锁法和动态换锁方案（动态方案可根据每次重构后的实际状态重新选择后续锁法）。给定预算支持 0～6 枚。
 
+### 截图识别副词条（试验版）
+
+1. 在区域 2 先点「设置识别区域」。工具会最小化，拖动框选可见游戏中的**完整副词条列表**，包含未解锁槽位。松开保存，按 Esc 取消。
+2. 回到简体中文开孔画面，在已开 **1～4 条**时点「截图识别」。识别结果会连同截图和原始文字一起预览，不会自动替换。
+3. 选出截图中的实际已开条数，按需更正词条、档位或补录漏行。对照原图确认没有漏项后，点击「确认替换」。Cost、主词条和预算不变；第五条仍需手动录入。
+
+只截取可见的窗口或无边框游戏画面。游戏位置、屏幕或缩放变化后请重新框选；不支持被遮挡、最小化或独占全屏的画面。透明度可调至 50%～100%，也可开启置顶；即使透明，工具与选区重叠时也会先最小化。
+
+截图与识别文字只驻留本机内存，不上传、不自动保存。识别设置独立保存在应用旁的 `ocr-settings.json`。macOS 若提示未授权，请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」授权当前应用（或启动源码版的应用），必要时重启。
+
+试验目标是 Windows 11 x64 与 macOS Apple Silicon；目标游戏页面与准确率仍待真实截图验收。不提供实时识别、快捷键、自动应用或 Linux OCR 支持承诺。识别不成功时仍可手动录入。
+
 ### 权重方案管理
 
 - 可以按副词条、Cost 1/3/4 主词条和固定小词条，分别设置权重。
@@ -39,7 +51,7 @@ WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算�
 
 Release提供了 Windows `.exe` 或 macOS `.app`，可直接运行，无需在目标电脑安装 Python：
 
-- Windows：双击 `WWEcho声骸工作台.exe` 启动。
+- Windows：双击 `WWEcho声骸工作台.exe` 启动。若下载的是 EXE＋依赖目录版，请完整解压后运行，不要把 EXE 单独移动。
 - macOS：在 Finder 中将 `WWEcho声骸工作台.app` 放到可写入的普通文件夹后打开。当前构建未进行 Apple Developer ID 签名和公证，macOS 可能显示安全提示。
 
 首次启动会在应用所在目录创建权重方案库`weight-presets.json`；备份该文件即可保留自己的方案。
@@ -60,16 +72,20 @@ python3 -m venv .venv
 
 `run.sh` 使用项目 `.venv` 中的 Python；若尚未安装依赖，请先执行上面的安装命令。
 
+仅在需要试用 OCR 时，用 **Python 3.9～3.12** 的项目虚拟环境执行 `python -m pip install -r requirements-ocr.txt`（Windows 使用 `.venv\Scripts\python.exe`，macOS 使用 `.venv/bin/python`）。此范围是当前候选引擎的试验环境约束，不改变手动功能的 Python 要求。
+
 ### 自行构建应用
 
-构建需要 Python 3.9 或更高版本及网络连接：
+含 OCR 的试验构建需要对应平台原生架构的 Python 3.9～3.12 和网络连接，以安装构建依赖：
 
-- Windows：在 Windows 上双击 `build-windows.bat`，生成 `dist/WWEcho声骸工作台.exe`。
-- macOS：在 macOS 项目目录执行 `./build-macos.sh`，生成 `dist/WWEcho声骸工作台.app`。应用架构与构建机的 Python 架构一致，例如 Apple Silicon 上构建得到 arm64 应用。
+- Windows 11 x64：`build-windows.bat` 默认构建两种产物。也可显式传入 `all`、`onefile` 或 `onedir`。
+  - 整合 EXE：`dist/windows-onefile/WWEcho声骸工作台.exe`。PyInstaller 会在启动时解包运行资源。
+  - EXE＋依赖目录：`dist/windows-onedir/WWEcho声骸工作台/`。分发时保留含 `_internal/` 的完整目录。
+- macOS Apple Silicon：执行 `./build-macos.sh`，得到 `dist/WWEcho声骸工作台.app`。需用原生 arm64 Python；当前构建不含 Developer ID 签名或公证。
 
-构建脚本会安装 `requirements-build.txt` 中的 PyInstaller 依赖。Windows 与 macOS 应分别在对应系统上构建。
+OCR 运行库、ONNX 模型和第三方许可信息随构建产物打包。运行时不下载模型，不需要系统 Python 或独立 OCR 工具。Windows 与 macOS 应分别在对应系统上构建，不能用其中一个产物的结果替代其他产物的验收。
 
-macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初始方案库模板；缺失时可先运行源码版 GUI 创建，或从已有方案库复制到该位置。
+构建前，项目根目录需有有效的 `weight-presets.json` 作为初始方案库模板；缺失时可先运行源码版 GUI 创建，或从已有方案库复制到该位置。
 
 ## 使用说明
 
@@ -88,6 +104,7 @@ macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初
 - [总体定义与术语](docs/General-Definition.md)
 - [调频／开孔算法说明](docs/Algorithm-Tuning.md)
 - [洗炼／洗词条算法说明](docs/Algorithm-Reroll.md)
+- [截图识别实施范围与验收要求](docs/OCR-Implementation-Plan.md)
 
 ## 运行测试
 

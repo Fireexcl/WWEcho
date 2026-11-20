@@ -6,12 +6,13 @@ import json
 import math
 import sys
 from concurrent.futures import CancelledError
+from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Sequence
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSignalBlocker, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
@@ -21,6 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
+from src.echo_ocr import SubStatEntry, validate_selection
+from src.echo_ocr_gui import OcrController
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, normalize_weights
 
@@ -370,7 +373,7 @@ class ReconstructionTask(QRunnable):
 
 
 class EchoWindow(QMainWindow):
-    def __init__(self, *, presets_path: Path | None = None) -> None:
+    def __init__(self, *, presets_path: Path | None = None, ocr_settings_path: Path | None = None) -> None:
         super().__init__()
         self.stats = load_json(DEFAULT_STATS)
         self.defaults = load_json(DEFAULT_WEIGHTS)
@@ -435,6 +438,11 @@ class EchoWindow(QMainWindow):
         self.resize(980, 940)
         self.setMinimumSize(760, 680)
         self.setStyleSheet(STYLE)
+        self.ocr = OcrController(
+            self, self.stats, ocr_settings_path if ocr_settings_path is not None
+            else local_presets.parent / "ocr-settings.json", self.apply_ocr_sub_stats,
+        )
+        self.ocr.close_ready.connect(self.close)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         canvas = QWidget()
@@ -762,7 +770,7 @@ class EchoWindow(QMainWindow):
     def _stats_panel(self) -> QGroupBox:
         group = QGroupBox("02  声骸词条与档位选择")
         layout = QVBoxLayout(group)
-        hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
+        hint = QLabel("选择一种方式录入副词条。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -778,14 +786,6 @@ class EchoWindow(QMainWindow):
         self.selected_count.setObjectName("badge")
         header.addWidget(QLabel("Cost"), 0, 0)
         header.addWidget(self.cost, 0, 1)
-        header.addWidget(QLabel("已选副词条"), 0, 2)
-        selection_toolbar = QHBoxLayout()
-        selection_toolbar.addWidget(self.selected_count)
-        self.clear_sub_stats_button = QPushButton("清空勾选")
-        self.clear_sub_stats_button.setObjectName("clearSelection")
-        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
-        selection_toolbar.addWidget(self.clear_sub_stats_button)
-        header.addLayout(selection_toolbar, 0, 3)
         header.addWidget(QLabel("满级主词条"), 1, 0)
         header.addWidget(self.main_stat, 1, 1)
         header.addWidget(self.main_value, 1, 2, 1, 2)
@@ -800,6 +800,22 @@ class EchoWindow(QMainWindow):
         self.stats_divider = self._divider()
         layout.addWidget(self.stats_divider)
 
+        self.sub_stat_tabs = QTabWidget()
+        manual_page = QWidget()
+        manual_layout = QVBoxLayout(manual_page)
+        manual_hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
+        manual_hint.setObjectName("muted")
+        manual_hint.setWordWrap(True)
+        manual_layout.addWidget(manual_hint)
+        self.selection_toolbar = QHBoxLayout()
+        self.selection_toolbar.addWidget(QLabel("已选副词条"))
+        self.selection_toolbar.addWidget(self.selected_count)
+        self.clear_sub_stats_button = QPushButton("清空勾选")
+        self.clear_sub_stats_button.setObjectName("clearSelection")
+        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
+        self.selection_toolbar.addWidget(self.clear_sub_stats_button)
+        self.selection_toolbar.addStretch()
+        manual_layout.addLayout(self.selection_toolbar)
         options = QGridLayout()
         self.sub_options_layout = options
         options.setHorizontalSpacing(8)
@@ -833,7 +849,10 @@ class EchoWindow(QMainWindow):
             options.addWidget(option, index // 3, index % 3)
         for column in range(3):
             options.setColumnStretch(column, 1)
-        layout.addLayout(options)
+        manual_layout.addLayout(options)
+        self.sub_stat_tabs.addTab(manual_page, "点击选择词条")
+        self.sub_stat_tabs.addTab(self.ocr.panel, "截图识别")
+        layout.addWidget(self.sub_stat_tabs)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
         return group
@@ -1349,6 +1368,8 @@ class EchoWindow(QMainWindow):
             self.stats["minor_stats"]["max_values_by_cost"][str(self.cost.currentData())].items()))
         self.minor_stat_label.setText(self.stats["stat_definitions"][minor_id]["name_zh"])
         self.minor_value.setText(f"+25 固定值：{self._format_value(minor_id, minor_value)}")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
 
     def _toggle_sub_stat(self, stat_id: str, checked: bool) -> None:
@@ -1370,12 +1391,15 @@ class EchoWindow(QMainWindow):
                 self.selected_sub_stats.remove(stat_id)
             self.sub_tier_inputs[stat_id].setEnabled(False)
             self.selected_count.setText(f"{len(self.selected_sub_stats)} / 5")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
 
     def _sub_tier_changed(self, stat_id: str) -> None:
         if self.updating:
             return
         if stat_id in self.selected_sub_stats:
+            self.ocr.input_changed()
             self.calculate()
 
     def clear_sub_stats(self) -> None:
@@ -1387,7 +1411,61 @@ class EchoWindow(QMainWindow):
             tier.setEnabled(False)
         self.selected_sub_stats.clear()
         self.selected_count.setText("0 / 5")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
+
+    def apply_ocr_sub_stats(self, entries: Sequence[SubStatEntry]) -> bool:
+        if self._closing:
+            raise ValueError("窗口正在关闭。")
+        selection = validate_selection(entries, self.stats)
+        targets = {}
+        for entry in selection:
+            tier = self.sub_tier_inputs.get(entry.stat_id)
+            index = tier.findData(entry.value) if tier is not None else -1
+            if index < 0 or entry.stat_id not in self.sub_stat_buttons:
+                raise ValueError("目标词条或档位控件不存在，未修改原输入。")
+            targets[entry.stat_id] = index
+        current = {name: self.sub_tier_inputs[name].currentData() for name in self.selected_sub_stats}
+        if current == {entry.stat_id: entry.value for entry in selection}:
+            return False
+
+        old_count = self.selected_count.text()
+        old_selection = self.selected_sub_stats
+        states = [
+            (stat_id, button, self.sub_tier_inputs[stat_id], button.isChecked(),
+             self.sub_tier_inputs[stat_id].currentIndex(),
+             not self.sub_tier_inputs[stat_id].testAttribute(Qt.WidgetAttribute.WA_ForceDisabled))
+            for stat_id, button in self.sub_stat_buttons.items()
+        ]
+        was_updating = self.updating
+        with ExitStack() as signals:
+            for _, button, tier, *_ in states:
+                signals.enter_context(QSignalBlocker(button))
+                signals.enter_context(QSignalBlocker(tier))
+            self.updating = True
+            try:
+                for stat_id, button, tier, *_ in states:
+                    selected = stat_id in targets
+                    button.setChecked(selected)
+                    if selected:
+                        tier.setCurrentIndex(targets[stat_id])
+                    tier.setEnabled(selected)
+                self.selected_sub_stats = list(targets)
+                self.selected_count.setText(f"{len(targets)} / 5")
+            except Exception:
+                for _, button, tier, checked, index, enabled in states:
+                    button.setChecked(checked)
+                    tier.setCurrentIndex(index)
+                    tier.setEnabled(enabled)
+                self.selected_sub_stats = old_selection
+                self.selected_count.setText(old_count)
+                raise
+            finally:
+                self.updating = was_updating
+        self.ocr.input_changed()
+        self.calculate()
+        return True
 
     def current_weights(self) -> dict[str, Any]:
         return {"schema_version": 1, "description": WEIGHTS_DESCRIPTION,
@@ -1586,14 +1664,22 @@ class EchoWindow(QMainWindow):
         self._update_progress_status(current)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._closing and not self._confirm_unsaved_weights():
+        if not self._closing:
+            if not self._confirm_unsaved_weights():
+                event.ignore()
+                return
+            self._closing = True
+            self._strategy_version += 1
+            self._strategy_timer.stop()
+            self._strategy_pending = None
+            self._strategy_cancelled.set()
+            self._reconstruction_version += 1
+            self._reconstruction_timer.stop()
+            self._reconstruction_pending = None
+            self._reconstruction_cancelled.set()
+        if not self.ocr.begin_close():
             event.ignore()
             return
-        self._closing = True
-        self._strategy_version += 1
-        self._strategy_timer.stop()
-        self._strategy_pending = None
-        self._strategy_cancelled.set()
         if self._strategy_task is not None:
             self._strategy_task.signals.finished.disconnect(self._strategy_finished)
         # analyze 无中断 API，关闭时等待唯一在途任务退出，不强杀线程。
@@ -1601,10 +1687,6 @@ class EchoWindow(QMainWindow):
         self._strategy_pool.waitForDone()
         self._strategy_task = None
         self._strategy_cache.clear()
-        self._reconstruction_version += 1
-        self._reconstruction_timer.stop()
-        self._reconstruction_pending = None
-        self._reconstruction_cancelled.set()
         if self._reconstruction_task is not None:
             self._reconstruction_task.signals.finished.disconnect(self._reconstruction_finished)
         self._reconstruction_pool.waitForDone()

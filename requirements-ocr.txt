@@ -1,0 +1,5 @@
+-r requirements.txt
+# OCR 试验构建组合（Python 3.9–3.12）；不改变手动功能的运行依赖。
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.19.2
+opencv-python==4.10.0.84

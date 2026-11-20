@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements-ocr.txt
 PyInstaller>=6.10,<7

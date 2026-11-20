@@ -467,9 +467,13 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_stats_divider_and_clear_button_style(self):
         layout = self.window.stats_divider.parentWidget().layout()
-        self.assertEqual(layout.itemAt(0).widget().text(), "直接点击词条名进行勾选，再次点击可取消勾选。")
+        self.assertEqual(layout.itemAt(0).widget().text(), "选择一种方式录入副词条。")
         self.assertIs(layout.itemAt(2).widget(), self.window.stats_divider)
-        self.assertIs(layout.itemAt(3).layout(), self.window.sub_options_layout)
+        self.assertIs(layout.itemAt(3).widget(), self.window.sub_stat_tabs)
+        manual_layout = self.window.sub_stat_tabs.widget(0).layout()
+        self.assertEqual(manual_layout.itemAt(0).widget().text(),
+                         "直接点击词条名进行勾选，再次点击可取消勾选。")
+        self.assertIs(manual_layout.itemAt(2).layout(), self.window.sub_options_layout)
         self.assertEqual(self.window.minor_stat_label.contentsMargins().left(), 8)
         self.assertEqual(self.window.clear_sub_stats_button.objectName(), "clearSelection")
         self.assertEqual(self.window.width(), 980)
@@ -1599,13 +1603,16 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(len(set(row for row, _ in coordinates)), 5)
 
     def test_clear_button_is_next_to_selected_count(self):
-        layouts = self.window.findChildren(QGridLayout)
-        header = next(grid for grid in layouts if grid.itemAtPosition(0, 3) is not None
-                      and grid.itemAtPosition(0, 3).layout() is not None
-                      and grid.itemAtPosition(0, 3).layout().indexOf(self.window.selected_count) >= 0)
-        toolbar = header.itemAtPosition(0, 3).layout()
+        toolbar = self.window.selection_toolbar
         self.assertEqual(toolbar.indexOf(self.window.clear_sub_stats_button),
                          toolbar.indexOf(self.window.selected_count) + 1)
+
+    def test_manual_selection_and_screenshot_recognition_are_tabs(self):
+        self.assertEqual([self.window.sub_stat_tabs.tabText(index)
+                          for index in range(self.window.sub_stat_tabs.count())],
+                         ["点击选择词条", "截图识别"])
+        self.assertIs(self.window.sub_stat_tabs.widget(1), self.window.ocr.panel)
+        self.assertIs(self.window.sub_stat_tabs.widget(0), self.window.selected_count.parentWidget())
 
     def test_theoretical_max_tracks_weights_and_not_selected_echo(self):
         weights = self.window.current_weights()

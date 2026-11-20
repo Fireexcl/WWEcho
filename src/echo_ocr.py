@@ -1,0 +1,256 @@
+"""本地 OCR 适配与独立于界面的副词条解析。"""
+
+from __future__ import annotations
+
+import math
+import re
+import unicodedata
+from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Sequence
+
+from src.echo_score import finite_number
+
+if TYPE_CHECKING:
+    from numpy import ndarray
+
+
+OCR_MAX_STATS = 4
+OCR_INSTALL_HINT = "源码版请按 README 安装可选 OCR 依赖；发行版请重新完整解压或安装。"
+MODEL_FILES = {
+    "det_model_path": "ch_PP-OCRv4_det_infer.onnx",
+    "rec_model_path": "ch_PP-OCRv4_rec_infer.onnx",
+    "cls_model_path": "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+}
+
+
+class OcrError(RuntimeError):
+    def __init__(self, category: str, message: str) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+@dataclass(frozen=True)
+class OcrToken:
+    text: str
+    box: tuple[float, float, float, float]  # 截图像素坐标，左／上／右／下
+    confidence: float
+
+
+@dataclass(frozen=True)
+class SubStatEntry:
+    stat_id: str
+    value: float
+
+
+@dataclass(frozen=True)
+class ParsedSubStat:
+    stat_id: str | None
+    value: float | None
+    raw_text: str
+    issues: tuple[str, ...] = ()
+
+
+class Completeness(Enum):
+    NEEDS_REVIEW = "待人工核对"
+    BLOCKED = "不能应用"
+
+
+@dataclass(frozen=True)
+class OcrResult:
+    rows: tuple[ParsedSubStat, ...]
+    raw_lines: tuple[str, ...]
+    unmatched_text: tuple[str, ...]
+    completeness: Completeness
+    blocking_issues: tuple[str, ...]
+    review_issues: tuple[str, ...]
+
+
+def validate_selection(entries: Sequence[SubStatEntry],
+                       stats: dict[str, Any]) -> tuple[SubStatEntry, ...]:
+    if not 1 <= len(entries) <= OCR_MAX_STATS:
+        raise ValueError(f"OCR 仅可替换 1～{OCR_MAX_STATS} 条已开副词条。")
+    tiers = stats["sub_stats"]["tiers"]
+    seen = set()
+    normalized = []
+    for entry in entries:
+        stat_id = entry.stat_id
+        if stat_id not in tiers:
+            raise ValueError("请选择配置中的副词条类型。")
+        name = stats["stat_definitions"][stat_id]["name_zh"]
+        if stat_id in seen:
+            raise ValueError(f"副词条不能重复：{name}。")
+        value = finite_number(entry.value, name)
+        matched = next((tier for tier in tiers[stat_id]["values"] if value == tier), None)
+        if matched is None:
+            raise ValueError(f"{name}的数值不属于合法档位。")
+        seen.add(stat_id)
+        normalized.append(SubStatEntry(stat_id, matched))
+    return tuple(normalized)
+
+
+def _normalize(text: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _group_lines(tokens: Sequence[OcrToken]) -> list[str]:
+    lines: list[list[OcrToken]] = []
+    for token in sorted((token for token in tokens if token.text.strip()),
+                        key=lambda token: ((token.box[1] + token.box[3]) / 2, token.box[0])):
+        _, top, _, bottom = token.box
+        best = None
+        best_distance = math.inf
+        for line in lines:
+            _, anchor_top, _, anchor_bottom = line[0].box
+            distance = abs((top + bottom) - (anchor_top + anchor_bottom)) / 2
+            overlap = min(bottom, anchor_bottom) - max(top, anchor_top)
+            if (overlap >= min(bottom - top, anchor_bottom - anchor_top) / 2
+                    and distance <= min(bottom - top, anchor_bottom - anchor_top) / 2
+                    and distance < best_distance):
+                best, best_distance = line, distance
+        if best is None:
+            lines.append([token])
+        else:
+            best.append(token)
+    return [" ".join(token.text.strip() for token in sorted(line, key=lambda token: token.box[0]))
+            for line in lines]
+
+
+_NAME_VALUE = re.compile(r"([^0-9+:%.\-]*)(.*)")
+_NUMBER = re.compile(r":?\+?([0-9]+(?:\.[0-9]+)?)(%)?")
+_NAME_ALIASES = {"暴击": "crit_rate"}
+_SHARED_NAMES = {"生命": "hp_pct"}
+_UNIT_DEPENDENT_NAMES = {
+    "攻击": {"flat": "atk_flat", "percentage_points": "atk_pct"},
+    "防御": {"flat": "def_flat", "percentage_points": "def_pct"},
+}
+_NON_TARGET = ("主词条", "固定小词条", "洗炼结果", "洗练结果", "重构结果")
+
+
+def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrResult:
+    tiers = stats["sub_stats"]["tiers"]
+    definitions = stats["stat_definitions"]
+    names = {_normalize(definitions[key]["name_zh"]): key for key in tiers}
+    out_of_scope = {_normalize(item["name_zh"]) for key, item in definitions.items()
+                    if key not in tiers}
+    labels = sorted(set(names) | set(_NAME_ALIASES) | set(_SHARED_NAMES) |
+                    set(_UNIT_DEPENDENT_NAMES), key=len, reverse=True)
+    label_after_value = re.compile(r"[0-9%](?:" + "|".join(map(re.escape, labels)) + r")")
+    rows = []
+    unmatched = []
+    blocking = []
+    raw_lines = tuple(_group_lines(tokens))
+    has_known_name = False
+    for raw in raw_lines:
+        text = _normalize(raw)
+        parts = _NAME_VALUE.fullmatch(text)
+        if parts is None:
+            unmatched.append(raw)
+            continue
+        label, number_text = parts.groups()
+        if text.startswith(_NON_TARGET) or label in out_of_scope:
+            if "检测到非副词条页面内容，请重新框选。" not in blocking:
+                blocking.append("检测到非副词条页面内容，请重新框选。")
+            unmatched.append(raw)
+            continue
+        if label_after_value.search(text):
+            blocking.append("同一识别行含有多个词条，无法验证行数。请重新截图。")
+        number = _NUMBER.fullmatch(number_text)
+        stat_id = names.get(label, _NAME_ALIASES.get(label))
+        percent_id = _SHARED_NAMES.get(label)
+        unit_dependent_ids = _UNIT_DEPENDENT_NAMES.get(label)
+        if stat_id is None and percent_id is None and unit_dependent_ids is None:
+            unmatched.append(raw)
+            if number is not None or (label and ("+" in number_text or "%" in number_text)):
+                rows.append(ParsedSubStat(None, None, raw, ("词条名未匹配，请核对原图。",)))
+            continue
+        has_known_name = True
+        if unit_dependent_ids is not None:
+            if number is None:
+                rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
+                continue
+            stat_id = unit_dependent_ids["percentage_points" if number[2] else "flat"]
+        elif percent_id is not None:
+            # 共享名称只有读到明确的百分号才可归入百分比，不能根据整数或档位猜类型。
+            if number is None or not number[2] or percent_id not in tiers:
+                rows.append(ParsedSubStat(None, None, raw, ("固定值／百分比不明确，请手动选择。",)))
+                continue
+            stat_id = percent_id
+        assert stat_id is not None
+        value = None
+        if number is None:
+            issues = ("数值缺失或格式无法识别，请核对档位。",)
+        elif bool(number[2]) != (definitions[stat_id]["unit"] == "percentage_points"):
+            issues = ("数值单位不匹配，请核对百分号与档位。",)
+        else:
+            numeric = Decimal(number[1])
+            value = next((v for v in tiers[stat_id]["values"] if Decimal(str(v)) == numeric), None)
+            issues = () if value is not None else ("不属于配置档位，请核对数值与小数点。",)
+        rows.append(ParsedSubStat(stat_id, value, raw, issues))
+
+    seen = set()
+    for index, row in enumerate(rows):
+        if row.stat_id in seen:
+            rows[index] = ParsedSubStat(row.stat_id, row.value, row.raw_text,
+                                        row.issues + ("词条类型重复，请核对。",))
+        if row.stat_id is not None:
+            seen.add(row.stat_id)
+    if len(rows) > OCR_MAX_STATS:
+        blocking.append(f"检测到 {len(rows)} 个可能的词条行；五条开满或多余行不能导入。")
+    if not has_known_name:
+        blocking.append("没有识别到可用的副词条名称；零条、非目标页面或不可识别画面均不能导入。")
+    review = ["完整性未自动确认：请对照原图核对开孔页面、已开条数，并补录可能的漏行。"]
+    if unmatched:
+        review.append("存在未匹配文字，请核对原图与框选范围。")
+    return OcrResult(tuple(rows), raw_lines, tuple(unmatched),
+                     Completeness.BLOCKED if blocking else Completeness.NEEDS_REVIEW,
+                     tuple(dict.fromkeys(blocking)), tuple(review))
+
+
+class LocalOcrEngine:
+    """一个串行队列内延迟初始化并复用 CPU 推理实例。"""
+
+    def __init__(self) -> None:
+        self._engine = None
+
+    def _load(self):
+        try:
+            import rapidocr_onnxruntime
+            from rapidocr_onnxruntime import RapidOCR
+        except (ImportError, OSError) as exc:
+            raise OcrError("OCR 依赖不可用", f"{exc}。{OCR_INSTALL_HINT}") from exc
+        resource_dir = Path(rapidocr_onnxruntime.__file__).resolve().parent
+        config_path = resource_dir / "config.yaml"
+        models = {key: resource_dir / "models" / filename for key, filename in MODEL_FILES.items()}
+        missing = [path.name for path in models.values() if not path.is_file()]
+        if not config_path.is_file():
+            missing.append(config_path.name)
+        if missing:
+            raise OcrError("OCR 模型资源缺失", f"缺少 {', '.join(missing)}。{OCR_INSTALL_HINT}")
+        return RapidOCR(config_path=str(config_path), **{key: str(path) for key, path in models.items()},
+                        intra_op_num_threads=2, inter_op_num_threads=1)
+
+    def recognize(self, image_array: ndarray) -> list[OcrToken]:
+        if self._engine is None:
+            try:
+                self._engine = self._load()
+            except OcrError:
+                raise
+            except Exception as exc:
+                raise OcrError("OCR 模型初始化失败",
+                               f"{type(exc).__name__}：{exc}。{OCR_INSTALL_HINT}") from exc
+        lines, _ = self._engine(image_array, use_det=True, use_cls=True, use_rec=True)
+        if lines is None:
+            return []
+        result = []
+        for points, text, confidence in lines:
+            xs, ys = zip(*points)
+            box = (float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys)))
+            score = float(confidence)
+            if (not isinstance(text, str) or not all(math.isfinite(x) for x in (*box, score))
+                    or box[0] >= box[2] or box[1] >= box[3] or not 0 <= score <= 1):
+                raise OcrError("OCR 返回格式异常", "本地引擎返回了无效文字坐标或置信度。")
+            result.append(OcrToken(text, box, score))
+        return result
