@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from PySide6.QtCore import QIODevice, QObject, QRunnable, QSaveFile, QSignalBlocker, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
     QPlainTextEdit, QPushButton, QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget,
@@ -24,6 +24,12 @@ from src.echo_ocr import (
     OCR_MAX_STATS, LocalOcrEngine, OcrError, OcrResult, OcrSelection, OcrToken, SubStatEntry,
     parse_sub_stats, validate_selection,
 )
+
+
+class WheelSafeComboBox(QComboBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        event.ignore()
+
 
 if TYPE_CHECKING:
     from numpy import ndarray
@@ -173,13 +179,13 @@ class OcrPreview(QWidget):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.summary)
         choices = QGridLayout()
-        self.cost_choice = QComboBox()
+        self.cost_choice = WheelSafeComboBox()
         self.cost_choice.addItem("请选择 Cost", None)
         for cost in stats["main_stats"]["max_values_by_cost"]:
             self.cost_choice.addItem(f"Cost {cost}", int(cost))
         if result.cost is not None:
             self.cost_choice.setCurrentIndex(self.cost_choice.findData(result.cost))
-        self.main_choice = QComboBox()
+        self.main_choice = WheelSafeComboBox()
         self.main_choice.addItem("请选择主词条", None)
         main_ids = dict.fromkeys(
             stat_id for pool in stats["main_stats"]["max_values_by_cost"].values() for stat_id in pool)
@@ -187,7 +193,7 @@ class OcrPreview(QWidget):
             self.main_choice.addItem(stats["stat_definitions"][stat_id]["name_zh"], stat_id)
         if result.main_stat is not None and result.main_stat.stat_id is not None:
             self.main_choice.setCurrentIndex(self.main_choice.findData(result.main_stat.stat_id))
-        self.minor_choice = QComboBox()
+        self.minor_choice = WheelSafeComboBox()
         self.minor_choice.addItem("请选择固定小词条", None)
         minor_ids = dict.fromkeys(
             stat_id for pool in stats["minor_stats"]["max_values_by_cost"].values() for stat_id in pool)
@@ -235,11 +241,11 @@ class OcrPreview(QWidget):
                 label = QLabel(" · ".join((row.raw_text, *row.issues)))
                 label.setWordWrap(True)
                 label.setTextFormat(Qt.TextFormat.PlainText)
-                stat = QComboBox()
+                stat = WheelSafeComboBox()
                 stat.addItem("请选择副词条", None)
                 for stat_id in stats["sub_stats"]["tiers"]:
                     stat.addItem(stats["stat_definitions"][stat_id]["name_zh"], stat_id)
-                tier = QComboBox()
+                tier = WheelSafeComboBox()
                 self.rows.append((label, stat, tier))
                 for col, widget in enumerate(self.rows[-1]):
                     grid.addWidget(widget, index, col)
@@ -270,6 +276,11 @@ class OcrPreview(QWidget):
         self.cost_choice.currentIndexChanged.connect(self._change_cost)
         self.main_choice.currentIndexChanged.connect(self._change_header_stat)
         self.minor_choice.currentIndexChanged.connect(self._change_header_stat)
+        for label in self.findChildren(QLabel):
+            if label is not picture:
+                label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                              | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+                label.setCursor(Qt.CursorShape.IBeamCursor)
         self._update_confirm()
 
     def _change_cost(self) -> None:
@@ -337,8 +348,6 @@ class OcrPreview(QWidget):
         definitions = self._stats["stat_definitions"]
         confidence = self.result_data.confidence
         self.summary.setText(
-            f"Cost {cost if cost is not None else '未判定'} · "
-            f"主词条 {definitions[main]['name_zh'] if main is not None else '未识别'} · "
             f"固定小词条 {definitions[minor]['name_zh'] if minor is not None else '未识别'} · "
             f"副词条 {len(self.result_data.rows)} 条"
             + (f" · 平均置信度 {confidence:.0%}" if confidence is not None else ""))

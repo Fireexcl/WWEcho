@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
 from src.echo_ocr import OcrSelection, SubStatEntry, validate_selection
-from src.echo_ocr_gui import OcrController
+from src.echo_ocr_gui import OcrController, WheelSafeComboBox
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, normalize_weights
 
@@ -775,11 +775,11 @@ class EchoWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         header = QGridLayout()
-        self.cost = QComboBox()
+        self.cost = WheelSafeComboBox()
         for cost in (1, 3, 4):
             self.cost.addItem(f"{cost} Cost", cost)
         self.cost.setCurrentIndex(2)
-        self.main_stat = QComboBox()
+        self.main_stat = WheelSafeComboBox()
         self.main_value = QLabel()
         self.main_value.setObjectName("muted")
         self.selected_count = QLabel("0 / 5")
@@ -833,7 +833,7 @@ class EchoWindow(QMainWindow):
             button.toggled.connect(
                 lambda checked, selected_id=stat_id: self._toggle_sub_stat(selected_id, checked)
             )
-            tier = QComboBox()
+            tier = WheelSafeComboBox()
             tier.setMinimumContentsLength(5)
             tier.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             for rank, value in enumerate(self.stats["sub_stats"]["tiers"][stat_id]["values"], 1):

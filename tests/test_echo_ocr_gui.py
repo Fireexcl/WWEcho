@@ -11,8 +11,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, QSaveFile, Qt, Signal
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtCore import QObject, QPoint, QPointF, QSaveFile, Qt, Signal
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 from src.echo_capture import CaptureError, CaptureRegion, CaptureSnapshot, Rect, ScreenInfo
 from src.echo_gui import EchoWindow
@@ -200,7 +201,9 @@ class EchoOcrGuiTests(unittest.TestCase):
         )
         preview = self.recognize()
         self.assertEqual(len(preview.rows), 5)
-        self.assertIn("Cost 4", preview.summary.text())
+        self.assertNotIn("Cost", preview.summary.text())
+        self.assertNotIn("主词条", preview.summary.text())
+        self.assertIn("固定小词条", preview.summary.text())
         self.assertTrue(preview.confirm.isEnabled(), preview.validation.text())
         with patch.object(self.window, "calculate", wraps=self.window.calculate) as calculate:
             self.confirm(preview)
@@ -212,6 +215,28 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertEqual(self.window.selected_count.text(), "5 / 5")
         self.assertEqual(len(echo["sub_stats"]), 5)
         self.assertIn("已回填词条", self.ocr.status.text())
+
+    def test_region_two_dropdowns_ignore_wheel_and_ocr_labels_are_selectable(self):
+        preview = self.recognize()
+        combos = [self.window.cost, self.window.main_stat,
+                  *self.window.sub_tier_inputs.values(), preview.cost_choice,
+                  preview.main_choice, preview.minor_choice,
+                  *(combo for _, stat, tier in preview.rows for combo in (stat, tier))]
+        for combo in combos:
+            if not combo.isEnabled() or combo.count() < 2:
+                continue
+            with self.subTest(combo=combo):
+                combo.setCurrentIndex(0)
+                event = QWheelEvent(
+                    QPointF(1, 1), QPointF(combo.mapToGlobal(QPoint(1, 1))),
+                    QPoint(0, -120), QPoint(0, -120), Qt.MouseButton.NoButton,
+                    Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+                QApplication.sendEvent(combo, event)
+                self.assertEqual(combo.currentIndex(), 0)
+        for label in preview.findChildren(QLabel):
+            if label.text():
+                self.assertTrue(label.textInteractionFlags()
+                                & Qt.TextInteractionFlag.TextSelectableByMouse)
 
     def test_game_names_and_unique_missing_character_apply_cost_and_main(self):
         examples = (
