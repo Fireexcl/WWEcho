@@ -6,7 +6,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from numpy import ndarray
 
 
-OCR_MAX_STATS = 4
+OCR_MAX_STATS = 5
 OCR_INSTALL_HINT = "源码版请按 README 安装可选 OCR 依赖；发行版请重新完整解压或安装。"
 MODEL_FILES = {
     "det_model_path": "ch_PP-OCRv4_det_infer.onnx",
@@ -46,6 +46,13 @@ class SubStatEntry:
 
 
 @dataclass(frozen=True)
+class ParsedEquipmentStat:
+    stat_id: str | None
+    value: float | None
+    raw_text: str
+
+
+@dataclass(frozen=True)
 class ParsedSubStat:
     stat_id: str | None
     value: float | None
@@ -66,6 +73,18 @@ class OcrResult:
     completeness: Completeness
     blocking_issues: tuple[str, ...]
     review_issues: tuple[str, ...]
+    main_stat: ParsedEquipmentStat | None = None
+    minor_stat: ParsedEquipmentStat | None = None
+    cost: int | None = None
+    confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class OcrSelection:
+    cost: int
+    main_stat: str
+    minor_stat: str
+    sub_stats: tuple[SubStatEntry, ...]
 
 
 def validate_selection(entries: Sequence[SubStatEntry],
@@ -129,10 +148,45 @@ _UNIT_DEPENDENT_NAMES = {
 _NON_TARGET = ("主词条", "固定小词条", "洗炼结果", "洗练结果", "重构结果")
 
 
+def _equipment_stat(raw: str, pools: dict[str, dict[str, float]],
+                    definitions: dict[str, Any]) -> ParsedEquipmentStat:
+    parts = _NAME_VALUE.fullmatch(_normalize(raw))
+    if parts is None:
+        return ParsedEquipmentStat(None, None, raw)
+    label, number_text = parts.groups()
+    stat_id = next((stat_id for pool in pools.values() for stat_id in pool
+                    if _normalize(definitions[stat_id]["name_zh"]) == label), None)
+    if stat_id is None:
+        return ParsedEquipmentStat(None, None, raw)
+    number = _NUMBER.fullmatch(number_text)
+    if number is None:
+        return ParsedEquipmentStat(stat_id, None, raw)
+    value = float(Decimal(number[1]))
+    expected_percent = definitions[stat_id]["unit"] == "percentage_points"
+    if bool(number[2]) != expected_percent:
+        return ParsedEquipmentStat(stat_id, None, raw)
+    return ParsedEquipmentStat(stat_id, value, raw)
+
+
+def _matching_upgrade_steps(value: float, stat_id: str, pool: dict[str, float],
+                            definitions: dict[str, Any]) -> set[int]:
+    # TODO: verify rounding and these inferred 0/5/10/15/20/25 values against in-game samples.
+    maximum = Decimal(str(pool[stat_id]))
+    quantum = Decimal("0.1") if definitions[stat_id]["unit"] == "percentage_points" else Decimal("1")
+    observed = Decimal(str(value))
+    return {
+        step for step in range(6)
+        if (maximum * Decimal(5 + 4 * step) / Decimal(25)).quantize(
+            quantum, rounding=ROUND_HALF_UP) == observed
+    }
+
+
 def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrResult:
     tiers = stats["sub_stats"]["tiers"]
     definitions = stats["stat_definitions"]
     names = {_normalize(definitions[key]["name_zh"]): key for key in tiers}
+    main_pools = stats["main_stats"]["max_values_by_cost"]
+    minor_pools = stats["minor_stats"]["max_values_by_cost"]
     out_of_scope = {_normalize(item["name_zh"]) for key, item in definitions.items()
                     if key not in tiers}
     labels = sorted(set(names) | set(_NAME_ALIASES) | set(_SHARED_NAMES) |
@@ -143,7 +197,55 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
     blocking = []
     raw_lines = tuple(_group_lines(tokens))
     has_known_name = False
-    for raw in raw_lines:
+    main_stat = _equipment_stat(raw_lines[0], main_pools, definitions) if raw_lines else None
+    minor_stat = _equipment_stat(raw_lines[1], minor_pools, definitions) if len(raw_lines) > 1 else None
+    if main_stat is None or main_stat.stat_id is None:
+        blocking.append("未识别到第一行主词条，请重新框选主词条、固定小词条和副词条。")
+    if minor_stat is None or minor_stat.stat_id is None:
+        blocking.append("未识别到第二行固定小词条，请重新框选主词条、固定小词条和副词条。")
+
+    cost = None
+    if (main_stat is not None and main_stat.stat_id is not None
+            and minor_stat is not None and minor_stat.stat_id is not None):
+        candidates = {
+            key for key, pool in main_pools.items() if main_stat.stat_id in pool
+        } & {
+            key for key, pool in minor_pools.items() if minor_stat.stat_id in pool
+        }
+        name_candidates = candidates.copy()
+        # Intermediate values can rule out a lower maximum, but must never be treated as max-level values.
+        if main_stat.value is not None:
+            candidates = {key for key in candidates
+                          if main_stat.value <= main_pools[key][main_stat.stat_id]}
+        if minor_stat.value is not None:
+            candidates = {key for key in candidates
+                          if minor_stat.value <= minor_pools[key][minor_stat.stat_id]}
+        if len(candidates) > 1:
+            progressed = set()
+            for key in candidates:
+                steps = set(range(6))
+                if main_stat.value is not None:
+                    steps &= _matching_upgrade_steps(
+                        main_stat.value, main_stat.stat_id, main_pools[key], definitions)
+                if minor_stat.value is not None:
+                    steps &= _matching_upgrade_steps(
+                        minor_stat.value, minor_stat.stat_id, minor_pools[key], definitions)
+                if steps:
+                    progressed.add(key)
+            candidates = progressed
+        if len(candidates) == 1:
+            cost = int(next(iter(candidates)))
+        elif not candidates:
+            if name_candidates:
+                blocking.append("主词条或固定小词条数值不符合 Cost 升级档位，请核对截图。")
+            else:
+                blocking.append("主词条与固定小词条组合不属于配置中的 Cost，请核对截图。")
+        else:
+            blocking.append("Cost 无法仅凭词条名称与当前过程值唯一判定，请补充可区分的截图。")
+
+    for index, raw in enumerate(raw_lines):
+        if index < 2:
+            continue
         text = _normalize(raw)
         parts = _NAME_VALUE.fullmatch(text)
         if parts is None:
@@ -198,15 +300,17 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
         if row.stat_id is not None:
             seen.add(row.stat_id)
     if len(rows) > OCR_MAX_STATS:
-        blocking.append(f"检测到 {len(rows)} 个可能的词条行；五条开满或多余行不能导入。")
+        blocking.append(f"检测到 {len(rows)} 个副词条行；最多只能导入 {OCR_MAX_STATS} 条。")
     if not has_known_name:
         blocking.append("没有识别到可用的副词条名称；零条、非目标页面或不可识别画面均不能导入。")
-    review = ["完整性未自动确认：请对照原图核对开孔页面、已开条数，并补录可能的漏行。"]
+    review = []
     if unmatched:
         review.append("存在未匹配文字，请核对原图与框选范围。")
+    confidences = [token.confidence for token in tokens if token.text.strip()]
     return OcrResult(tuple(rows), raw_lines, tuple(unmatched),
                      Completeness.BLOCKED if blocking else Completeness.NEEDS_REVIEW,
-                     tuple(dict.fromkeys(blocking)), tuple(review))
+                     tuple(dict.fromkeys(blocking)), tuple(review), main_stat, minor_stat, cost,
+                     math.fsum(confidences) / len(confidences) if confidences else None)
 
 
 class LocalOcrEngine:

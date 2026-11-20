@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QObject, QSaveFile, Qt, Signal
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication
 
 from src.echo_capture import CaptureError, CaptureRegion, CaptureSnapshot, Rect, ScreenInfo
 from src.echo_gui import EchoWindow
@@ -36,7 +36,8 @@ class ControlledEngine:
         self.gate = threading.Event()
         self.gate.set()
         self.calls = []
-        self.output = tokens("暴击率 +10.5%", "暴击伤害 +21%")
+        self.output = tokens("暴击率 +10.5%", "固定攻击 +40",
+                             "暴击率 +10.5%", "暴击伤害 +21%")
         self.error = None
 
     def recognize(self, image):
@@ -116,9 +117,7 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.wait_until(lambda: self.ocr._preview is not None)
         return self.ocr._preview
 
-    def confirm(self, preview, count):
-        preview.actual_count.setCurrentIndex(preview.actual_count.findData(count))
-        preview.checked.setChecked(True)
+    def confirm(self, preview):
         self.assertTrue(preview.confirm.isEnabled(), preview.validation.text())
         preview.confirm.click()
 
@@ -142,15 +141,15 @@ class EchoOcrGuiTests(unittest.TestCase):
         previous = self.window.current_echo()
         self.window.reconstruction_budget.setValue(3)
         preview = self.recognize()
-        self.assertEqual(preview.windowModality(), Qt.WindowModality.WindowModal)
+        self.assertIs(self.ocr.pages.currentWidget(), preview)
+        self.assertIs(self.window.sub_stat_tabs.currentWidget(), self.ocr.panel)
+        self.assertFalse(hasattr(preview, "actual_count"))
+        self.assertFalse(hasattr(preview, "checked"))
         self.assertEqual(self.window.current_echo(), previous)
         self.assertIn("暴击伤害", preview.raw.toPlainText())
-        self.assertFalse(preview.confirm.isEnabled())
-        preview.actual_count.setCurrentIndex(preview.actual_count.findData(2))
-        self.assertFalse(preview.confirm.isEnabled())
         with patch.object(self.window, "calculate", wraps=self.window.calculate) as calculate, \
                 patch.object(self.window.sub_tier_inputs["crit_rate"], "showPopup") as popup:
-            self.confirm(preview, 2)
+            self.confirm(preview)
             self.app.processEvents()
             calculate.assert_called_once_with()
             popup.assert_not_called()
@@ -176,12 +175,10 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertEqual(self.window._score_result, score)
         self.assertEqual(self.window._strategy_pending[1], pending)
 
-    def test_can_correct_invalid_unit_and_add_missing_row(self):
-        self.engine.output = tokens("暴击率 +105%", "暴击伤害 +21%")
+    def test_can_correct_invalid_unit_without_manually_selecting_open_count(self):
+        self.engine.output = tokens("暴击率 +10.5%", "固定攻击 +40", "暴击率 +105%",
+                                    "暴击伤害 +21%", "共鸣效率 +12.4%")
         preview = self.recognize()
-        self.assertEqual(preview.actual_count.findData(1), -1)
-        preview.actual_count.setCurrentIndex(preview.actual_count.findData(3))
-        preview.checked.setChecked(True)
         self.assertFalse(preview.confirm.isEnabled())
         first_tier = preview.rows[0][2]
         first_tier.setCurrentIndex(first_tier.findData(10.5))
@@ -191,16 +188,37 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertIn("重复", preview.validation.text())
         third_stat.setCurrentIndex(third_stat.findData("atk_flat"))
         third_tier.setCurrentIndex(third_tier.findData(50))
-        self.confirm(preview, 3)
+        self.confirm(preview)
         self.assertEqual(self.window.selected_sub_stats, ["crit_rate", "crit_dmg", "atk_flat"])
         self.assertEqual(self.window.sub_tier_inputs["atk_flat"].currentData(), 50)
+
+    def test_five_recognized_sub_stats_auto_fill_header_and_recalculate_once(self):
+        self.engine.output = tokens(
+            "攻击百分比 +33%", "固定攻击 +150",
+            "暴击率 +10.5%", "暴击伤害 +21%", "共鸣效率 +12.4%",
+            "固定生命 +320", "固定防御 +50",
+        )
+        preview = self.recognize()
+        self.assertEqual(len(preview.rows), 5)
+        self.assertIn("Cost 4", preview.summary.text())
+        self.assertTrue(preview.confirm.isEnabled(), preview.validation.text())
+        with patch.object(self.window, "calculate", wraps=self.window.calculate) as calculate:
+            self.confirm(preview)
+            self.app.processEvents()
+            calculate.assert_called_once_with()
+        echo = self.window.current_echo()
+        self.assertEqual(echo["cost"], 4)
+        self.assertEqual(echo["main_stat"]["name"], "atk_pct")
+        self.assertEqual(self.window.selected_count.text(), "5 / 5")
+        self.assertEqual(len(echo["sub_stats"]), 5)
+        self.assertIn("已回填词条", self.ocr.status.text())
 
     def test_same_selection_does_not_reorder_or_recalculate(self):
         self.window.apply_ocr_sub_stats(EXAMPLE[::-1])
         version = self.ocr.input_version
         preview = self.recognize()
         with patch.object(self.window, "calculate") as calculate:
-            self.confirm(preview, 2)
+            self.confirm(preview)
             calculate.assert_not_called()
         self.assertEqual(self.ocr.input_version, version)
         self.assertEqual(self.window.selected_sub_stats, ["crit_dmg", "crit_rate"])
@@ -209,18 +227,30 @@ class EchoOcrGuiTests(unittest.TestCase):
     def test_cancel_and_structural_failures_never_modify_input(self):
         self.window.apply_ocr_sub_stats([SubStatEntry("def_flat", 50)])
         before = self.window.current_echo()
-        self.recognize().reject()
+        self.recognize().cancel()
         self.assertIn("已取消", self.ocr.status.text())
-        for output in ([], tokens("暴击率 +10.5%", "暴击伤害 +21%", "共鸣效率 +12.4%",
-                                  "固定生命 +320", "固定攻击 +40"),
+        for output in ([], tokens("暴击率 +10.5%", "固定攻击 +40", "暴击率 +10.5%",
+                                  "暴击伤害 +21%", "共鸣效率 +12.4%", "固定生命 +320",
+                                  "固定攻击 +40", "固定防御 +50"),
                        tokens("主词条", "暴击率 +10.5%")):
             with self.subTest(output=output):
                 self.engine.output = output
                 preview = self.recognize()
-                self.assertFalse(preview.actual_count.isEnabled())
                 self.assertFalse(preview.confirm.isEnabled())
-                preview.done(QDialog.DialogCode.Accepted)
+                preview.accept()
                 self.assertEqual(self.window.current_echo(), before)
+
+    def test_ambiguous_cost_result_cannot_be_applied(self):
+        self.engine.output = tokens(
+            "攻击百分比", "固定攻击",
+            "暴击率 +10.5%", "暴击伤害 +21%",
+        )
+        before = self.window.current_echo()
+        preview = self.recognize()
+        self.assertIn("Cost 无法", preview.notice.text())
+        self.assertFalse(preview.confirm.isEnabled())
+        preview.cancel()
+        self.assertEqual(self.window.current_echo(), before)
 
     def test_task_error_reports_category_and_preserves_input(self):
         self.window.apply_ocr_sub_stats(EXAMPLE)
@@ -261,12 +291,10 @@ class EchoOcrGuiTests(unittest.TestCase):
 
     def test_confirmation_rechecks_version(self):
         preview = self.recognize()
-        preview.actual_count.setCurrentIndex(preview.actual_count.findData(2))
-        preview.checked.setChecked(True)
         self.assertTrue(preview.confirm.isEnabled())
         self.window.clear_sub_stats()
         self.assertFalse(preview.confirm.isEnabled())
-        preview.done(QDialog.DialogCode.Accepted)
+        preview.cancel()
         self.assertIn("过期", self.ocr.status.text())
         self.assertFalse(self.window.selected_sub_stats)
 

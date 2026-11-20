@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
-from src.echo_ocr import SubStatEntry, validate_selection
+from src.echo_ocr import OcrSelection, SubStatEntry, validate_selection
 from src.echo_ocr_gui import OcrController
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, normalize_weights
@@ -440,7 +440,7 @@ class EchoWindow(QMainWindow):
         self.setStyleSheet(STYLE)
         self.ocr = OcrController(
             self, self.stats, ocr_settings_path if ocr_settings_path is not None
-            else local_presets.parent / "ocr-settings.json", self.apply_ocr_sub_stats,
+            else local_presets.parent / "ocr-settings.json", self.apply_ocr_selection,
         )
         self.ocr.close_ready.connect(self.close)
         scroll = QScrollArea()
@@ -796,13 +796,13 @@ class EchoWindow(QMainWindow):
         header.addWidget(self.minor_stat_label, 2, 1)
         header.addWidget(self.minor_value, 2, 2, 1, 2)
         self.minor_stat_label.setContentsMargins(8, 0, 0, 0)
-        layout.addLayout(header)
-        self.stats_divider = self._divider()
-        layout.addWidget(self.stats_divider)
 
         self.sub_stat_tabs = QTabWidget()
         manual_page = QWidget()
         manual_layout = QVBoxLayout(manual_page)
+        manual_layout.addLayout(header)
+        self.stats_divider = self._divider()
+        manual_layout.addWidget(self.stats_divider)
         manual_hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
         manual_hint.setObjectName("muted")
         manual_hint.setWordWrap(True)
@@ -852,6 +852,8 @@ class EchoWindow(QMainWindow):
         manual_layout.addLayout(options)
         self.sub_stat_tabs.addTab(manual_page, "点击选择词条")
         self.sub_stat_tabs.addTab(self.ocr.panel, "截图识别")
+        self.ocr.preview_ready.connect(
+            lambda: self.sub_stat_tabs.setCurrentWidget(self.ocr.panel))
         layout.addWidget(self.sub_stat_tabs)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
@@ -1416,9 +1418,31 @@ class EchoWindow(QMainWindow):
         self.calculate()
 
     def apply_ocr_sub_stats(self, entries: Sequence[SubStatEntry]) -> bool:
+        return self._apply_ocr_inputs(entries)
+
+    def apply_ocr_selection(self, selection: OcrSelection) -> bool:
+        return self._apply_ocr_inputs(
+            selection.sub_stats, cost=selection.cost,
+            main_stat=selection.main_stat, minor_stat=selection.minor_stat)
+
+    def _apply_ocr_inputs(self, entries: Sequence[SubStatEntry], *,
+                          cost: int | None = None, main_stat: str | None = None,
+                          minor_stat: str | None = None) -> bool:
         if self._closing:
             raise ValueError("窗口正在关闭。")
         selection = validate_selection(entries, self.stats)
+        has_header = cost is not None or main_stat is not None or minor_stat is not None
+        if has_header and (cost is None or main_stat is None or minor_stat is None):
+            raise ValueError("Cost、主词条和固定小词条必须一起提供。")
+        cost_index = self.cost.findData(cost) if cost is not None else self.cost.currentIndex()
+        if cost_index < 0:
+            raise ValueError("识别到的 Cost 不存在，未修改原输入。")
+        target_cost = self.cost.itemData(cost_index)
+        main_pool = self.stats["main_stats"]["max_values_by_cost"][str(target_cost)]
+        minor_pool = self.stats["minor_stats"]["max_values_by_cost"][str(target_cost)]
+        if has_header:
+            if main_stat not in main_pool or minor_pool.get(minor_stat) is None:
+                raise ValueError("识别到的主词条或固定小词条与 Cost 不匹配，未修改原输入。")
         targets = {}
         for entry in selection:
             tier = self.sub_tier_inputs.get(entry.stat_id)
@@ -1427,11 +1451,16 @@ class EchoWindow(QMainWindow):
                 raise ValueError("目标词条或档位控件不存在，未修改原输入。")
             targets[entry.stat_id] = index
         current = {name: self.sub_tier_inputs[name].currentData() for name in self.selected_sub_stats}
-        if current == {entry.stat_id: entry.value for entry in selection}:
+        current_header = (self.cost.currentData(), self.main_stat.currentData())
+        requested_header = (target_cost, main_stat)
+        if (current == {entry.stat_id: entry.value for entry in selection}
+                and (not has_header or current_header == requested_header)):
             return False
 
         old_count = self.selected_count.text()
-        old_selection = self.selected_sub_stats
+        old_selection = list(self.selected_sub_stats)
+        old_cost_index = self.cost.currentIndex()
+        old_main_stat = self.main_stat.currentData()
         states = [
             (stat_id, button, self.sub_tier_inputs[stat_id], button.isChecked(),
              self.sub_tier_inputs[stat_id].currentIndex(),
@@ -1440,11 +1469,21 @@ class EchoWindow(QMainWindow):
         ]
         was_updating = self.updating
         with ExitStack() as signals:
+            signals.enter_context(QSignalBlocker(self.cost))
+            signals.enter_context(QSignalBlocker(self.main_stat))
             for _, button, tier, *_ in states:
                 signals.enter_context(QSignalBlocker(button))
                 signals.enter_context(QSignalBlocker(tier))
             self.updating = True
             try:
+                if has_header:
+                    self.cost.setCurrentIndex(cost_index)
+                    self._refresh_main()
+                    main_index = self.main_stat.findData(main_stat)
+                    if main_index < 0:
+                        raise ValueError("目标主词条控件不存在，未修改原输入。")
+                    self.main_stat.setCurrentIndex(main_index)
+                    self._main_changed()
                 for stat_id, button, tier, *_ in states:
                     selected = stat_id in targets
                     button.setChecked(selected)
@@ -1454,6 +1493,12 @@ class EchoWindow(QMainWindow):
                 self.selected_sub_stats = list(targets)
                 self.selected_count.setText(f"{len(targets)} / 5")
             except Exception:
+                self.cost.setCurrentIndex(old_cost_index)
+                self._refresh_main()
+                old_main_index = self.main_stat.findData(old_main_stat)
+                if old_main_index >= 0:
+                    self.main_stat.setCurrentIndex(old_main_index)
+                self._main_changed()
                 for _, button, tier, checked, index, enabled in states:
                     button.setChecked(checked)
                     tier.setCurrentIndex(index)

@@ -7,13 +7,13 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from PySide6.QtCore import QIODevice, QObject, QRunnable, QSaveFile, QSignalBlocker, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
-    QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
+    QPlainTextEdit, QPushButton, QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from src.echo_capture import (
@@ -21,7 +21,7 @@ from src.echo_capture import (
     WindowAppearance, capture_region, resolve_screen,
 )
 from src.echo_ocr import (
-    OCR_MAX_STATS, LocalOcrEngine, OcrError, OcrResult, OcrToken, SubStatEntry,
+    OCR_MAX_STATS, LocalOcrEngine, OcrError, OcrResult, OcrSelection, OcrToken, SubStatEntry,
     parse_sub_stats, validate_selection,
 )
 
@@ -153,7 +153,9 @@ class _OcrTask(QRunnable):
         self.signals.finished.emit(OcrOutcome(self.stamp, payload))
 
 
-class OcrPreview(QDialog):
+class OcrPreview(QWidget):
+    finished = Signal(bool)
+
     def __init__(self, parent: QWidget, snapshot: CaptureSnapshot,
                  result: OcrResult, stats: dict[str, Any], stamp: RequestStamp) -> None:
         super().__init__(parent)
@@ -161,13 +163,24 @@ class OcrPreview(QDialog):
         self.result_data = result
         self.stamp = stamp
         self._invalidated = False
-        self.setWindowTitle("核对截图识别结果")
-        self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.resize(820, 600)
+        self._finished = False
         layout = QVBoxLayout(self)
-        hint = QLabel("仅替换副词条；沿用当前 Cost 和主词条，不判断是否为同一只声骸。")
+        hint = QLabel("识别到的主词条、固定小词条、Cost 和副词条将一起回填；识别到五条副词条时会按开满状态评分。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        header = result.main_stat, result.minor_stat
+        main_name = (stats["stat_definitions"][header[0].stat_id]["name_zh"]
+                     if header[0] is not None and header[0].stat_id is not None else "未识别")
+        minor_name = (stats["stat_definitions"][header[1].stat_id]["name_zh"]
+                      if header[1] is not None and header[1].stat_id is not None else "未识别")
+        self.summary = QLabel(
+            f"Cost {result.cost if result.cost is not None else '未判定'} · "
+            f"主词条 {main_name} · 固定小词条 {minor_name} · "
+            f"副词条 {len(result.rows)} 条"
+            + (f" · 平均置信度 {result.confidence:.0%}" if result.confidence is not None else ""))
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.summary)
         evidence = QHBoxLayout()
         picture = QLabel()
         picture.setPixmap(QPixmap.fromImage(snapshot.qimage()))
@@ -181,25 +194,20 @@ class OcrPreview(QDialog):
         self.raw.setPlainText("\n".join(result.raw_lines) or "（未识别到文字）")
         evidence.addWidget(self.raw, 2)
         layout.addLayout(evidence, 1)
-        notice = QLabel("\n".join((result.completeness.value,) + result.blocking_issues + result.review_issues))
+        messages = result.blocking_issues + result.review_issues
+        notice_text = "\n".join(messages) if messages else (
+            f"识别到 {len(result.rows)} 条副词条；将按识别数量回填，可在下方校正词条或档位。")
+        notice = QLabel(notice_text)
         notice.setWordWrap(True)
         notice.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(notice)
-
-        self.actual_count = QComboBox()
-        self.actual_count.addItem("请选择原图已开条数", 0)
-        min_count = max(1, len(result.rows))
-        for count in range(min_count, OCR_MAX_STATS + 1):
-            self.actual_count.addItem(f"原图已开 {count} 条", count)
-        self.actual_count.setEnabled(not result.blocking_issues)
-        layout.addWidget(self.actual_count)
+        self.notice = notice
         grid = QGridLayout()
         layout.addLayout(grid)
         self.rows: list[tuple[QLabel, QComboBox, QComboBox]] = []
         if not result.blocking_issues:
-            for index in range(OCR_MAX_STATS):
-                row = result.rows[index] if index < len(result.rows) else None
-                label = QLabel(" · ".join((row.raw_text, *row.issues)) if row else "补录漏识别项")
+            for index, row in enumerate(result.rows):
+                label = QLabel(" · ".join((row.raw_text, *row.issues)))
                 label.setWordWrap(True)
                 label.setTextFormat(Qt.TextFormat.PlainText)
                 stat = QComboBox()
@@ -215,28 +223,25 @@ class OcrPreview(QDialog):
                 self._refresh_tiers(index)
                 if row is not None and row.value is not None:
                     tier.setCurrentIndex(tier.findData(row.value))
-                stat.currentIndexChanged.connect(lambda _index, i=index: self._change_stat(i))
+                stat.currentIndexChanged.connect(lambda *_, i=index: self._change_stat(i))
                 tier.currentIndexChanged.connect(self._update_confirm)
         elif result.rows:
             self.raw.appendPlainText("\n解析行（不可应用）：\n" + "\n".join(
                 " · ".join((row.raw_text, *row.issues)) for row in result.rows))
 
-        self.checked = QCheckBox("我已对照截图核对：这是指定开孔页面，全部已开副词条都已录入，且未开满五条。")
-        self.checked.setEnabled(not result.blocking_issues)
-        layout.addWidget(self.checked)
         self.validation = QLabel()
         self.validation.setWordWrap(True)
         layout.addWidget(self.validation)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        self.confirm = buttons.addButton("确认替换", QDialogButtonBox.ButtonRole.AcceptRole)
-        cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        cancel.setText("取消")
-        cancel.setDefault(True)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self.actual_count.currentIndexChanged.connect(self._update_confirm)
-        self.checked.toggled.connect(self._update_confirm)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self.cancel_button = QPushButton("取消")
+        self.confirm = QPushButton("确认并回填")
+        self.confirm.setDefault(True)
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.confirm)
+        layout.addLayout(buttons)
+        self.confirm.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.cancel)
         self._update_confirm()
 
     def _refresh_tiers(self, index: int) -> None:
@@ -255,30 +260,28 @@ class OcrPreview(QDialog):
         self._refresh_tiers(index)
         self._update_confirm()
 
-    def selection(self) -> tuple[SubStatEntry, ...]:
+    def selection(self) -> OcrSelection:
         if self._invalidated:
             raise ValueError("输入或识别区已变更，请取消后重新识别。")
         if self.result_data.blocking_issues:
             raise ValueError("请重新截图或调整识别区域。")
-        count = self.actual_count.currentData()
-        if not max(1, len(self.result_data.rows)) <= count <= OCR_MAX_STATS:
-            raise ValueError("请先选择截图中实际已开的条数；不能删减识别到的可能词条行。")
+        if self.result_data.cost is None or self.result_data.main_stat is None \
+                or self.result_data.main_stat.stat_id is None \
+                or self.result_data.minor_stat is None or self.result_data.minor_stat.stat_id is None:
+            raise ValueError("Cost、主词条或固定小词条未识别，请重新截图。")
+        if not 1 <= len(self.rows) <= OCR_MAX_STATS:
+            raise ValueError(f"OCR 必须识别到 1～{OCR_MAX_STATS} 条副词条。")
         entries = []
-        for index, (_, stat, tier) in enumerate(self.rows[:count], 1):
+        for index, (_, stat, tier) in enumerate(self.rows, 1):
             stat_id, value = stat.currentData(), tier.currentData()
             if stat_id is None or value is None:
-                raise ValueError(f"请补全第 {index} 条的词条和档位。")
+                raise ValueError(f"请校正第 {index} 条的词条和档位。")
             entries.append(SubStatEntry(stat_id, value))
         entries = validate_selection(entries, self._stats)
-        if not self.checked.isChecked():
-            raise ValueError("请核对截图并勾选确认。")
-        return entries
+        return OcrSelection(self.result_data.cost, self.result_data.main_stat.stat_id,
+                            self.result_data.minor_stat.stat_id, entries)
 
     def _update_confirm(self) -> None:
-        count = max(len(self.result_data.rows), self.actual_count.currentData())
-        for index, widgets in enumerate(self.rows):
-            for widget in widgets:
-                widget.setVisible(index < count)
         try:
             self.selection()
         except ValueError as exc:
@@ -290,12 +293,21 @@ class OcrPreview(QDialog):
 
     def invalidate(self) -> None:
         self._invalidated = True
+        self.notice.setText("输入或识别区域已变更，当前结果不可回填。")
         self._update_confirm()
 
     def accept(self) -> None:
         self._update_confirm()
         if self.confirm.isEnabled():
-            super().accept()
+            self._finish(True)
+
+    def cancel(self) -> None:
+        self._finish(False)
+
+    def _finish(self, accepted: bool) -> None:
+        if not self._finished:
+            self._finished = True
+            self.finished.emit(accepted)
 
 
 class _State(Enum):
@@ -311,9 +323,10 @@ class _State(Enum):
 
 class OcrController(QObject):
     close_ready = Signal()
+    preview_ready = Signal()
 
     def __init__(self, window: QMainWindow, stats: dict[str, Any], settings_path: Path,
-                 apply_selection: Callable[[Sequence[SubStatEntry]], bool]) -> None:
+                 apply_selection: Callable[[OcrSelection], bool]) -> None:
         super().__init__(window)
         self.window = window
         self.stats = deepcopy(stats)
@@ -339,13 +352,17 @@ class OcrController(QObject):
         self.panel = QWidget(window)
         layout = QVBoxLayout(self.panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        self.pages = QStackedWidget(self.panel)
+        layout.addWidget(self.pages)
+        self.controls_page = QWidget()
+        controls_layout = QVBoxLayout(self.controls_page)
         actions = QHBoxLayout()
         self.select_button = QPushButton("设置识别区域")
         self.recognize_button = QPushButton("截图识别")
         actions.addWidget(self.select_button)
         actions.addWidget(self.recognize_button)
         actions.addStretch()
-        layout.addLayout(actions)
+        controls_layout.addLayout(actions)
         appearance = QHBoxLayout()
         self.opacity_text = QLabel()
         self.opacity = QSlider(Qt.Orientation.Horizontal)
@@ -359,20 +376,21 @@ class OcrController(QObject):
         appearance.addWidget(self.opacity, 1)
         appearance.addWidget(self.on_top)
         appearance.addWidget(self.reset)
-        layout.addLayout(appearance)
+        controls_layout.addLayout(appearance)
         self.status = QLabel()
         self.settings_status = QLabel()
         for label in (self.status, self.settings_status):
             label.setObjectName("muted")
             label.setWordWrap(True)
             label.setTextFormat(Qt.TextFormat.PlainText)
-            layout.addWidget(label)
+            controls_layout.addWidget(label)
         self.settings_status.setText(self.store.read_error)
         self.settings_status.setVisible(bool(self.store.read_error))
+        self.pages.addWidget(self.controls_page)
         self._show_opacity()
         window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.settings.on_top)
-        self._idle("已加载识别区。截图后需核对并确认替换。" if self.settings.region else
-                   "尚未设置识别区。请框选可见游戏中的完整副词条列表。")
+        self._idle("已加载识别区。截图后可在识别标签页校正并回填。" if self.settings.region else
+                   "尚未设置识别区。请框选主词条、固定小词条和完整副词条列表。")
         self.select_button.clicked.connect(self.select_region)
         self.recognize_button.clicked.connect(self.recognize)
         self.opacity.valueChanged.connect(self._change_opacity)
@@ -555,33 +573,37 @@ class OcrController(QObject):
             self._current = None
             self._idle(f"{outcome.payload.category}：{outcome.payload.message}")
             return
-        self._preview = OcrPreview(self.window, snapshot, outcome.payload, self.stats, outcome.stamp)
+        self._preview = OcrPreview(self.pages, snapshot, outcome.payload, self.stats, outcome.stamp)
         self._preview.finished.connect(self._preview_finished)
-        self._set_state(_State.REVIEW, "请核对识别截图；未确认不会修改录入。")
-        self._preview.open()
+        self.pages.addWidget(self._preview)
+        self.pages.setCurrentWidget(self._preview)
+        self.preview_ready.emit()
+        self._set_state(_State.REVIEW, "识别完成；请在当前标签页查看并回填结果。")
 
-    @Slot(int)
-    def _preview_finished(self, result_code: int) -> None:
+    @Slot(bool)
+    def _preview_finished(self, accepted: bool) -> None:
         preview, self._preview = self._preview, None
         try:
             if self._state is _State.CLOSING or preview is None:
                 return
             if not self._is_current(preview.stamp):
                 self._idle("识别结果已过期，请重新识别。")
-            elif result_code != QDialog.DialogCode.Accepted:
-                self._idle("识别无法导入，请重新截图。"
-                           if preview.result_data.blocking_issues else "已取消，原输入未改变。")
+            elif not accepted:
+                self._idle("已取消，原输入未改变。")
             else:
-                self._set_state(_State.APPLYING, "正在替换副词条…")
+                self._set_state(_State.APPLYING, "正在回填词条并更新评分…")
                 try:
                     changed = self._apply(preview.selection())
                 except (ValueError, RuntimeError) as exc:
                     self._idle(f"未应用：{exc}")
                 else:
-                    self._idle("已替换副词条并更新评分。" if changed else "识别结果与当前输入一致，无需替换。")
+                    self._idle("已回填词条并更新评分。" if changed
+                               else "识别结果与当前输入一致，无需重新计算。")
         finally:
             self._current = None
             if preview is not None:
+                self.pages.setCurrentWidget(self.controls_page)
+                self.pages.removeWidget(preview)
                 preview.deleteLater()
 
     def begin_close(self) -> bool:
@@ -597,7 +619,7 @@ class OcrController(QObject):
                 self._picker = None
             self._restore_window()
             if self._preview is not None:
-                self._preview.reject()
+                self._preview.cancel()
         if not self._pool.waitForDone(0):
             self.window.statusBar().showMessage("正在结束识别，请稍候…")
             self._close_timer.start()

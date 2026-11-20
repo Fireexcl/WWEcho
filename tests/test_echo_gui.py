@@ -466,14 +466,19 @@ class EchoGuiTests(unittest.TestCase):
         self.assertTrue(self.window.custom_weights_notice.isHidden())
 
     def test_stats_divider_and_clear_button_style(self):
-        layout = self.window.stats_divider.parentWidget().layout()
+        layout = self.window.sub_stat_tabs.parentWidget().layout()
         self.assertEqual(layout.itemAt(0).widget().text(), "选择一种方式录入副词条。")
-        self.assertIs(layout.itemAt(2).widget(), self.window.stats_divider)
-        self.assertIs(layout.itemAt(3).widget(), self.window.sub_stat_tabs)
+        self.assertIs(layout.itemAt(1).widget(), self.window.sub_stat_tabs)
         manual_layout = self.window.sub_stat_tabs.widget(0).layout()
-        self.assertEqual(manual_layout.itemAt(0).widget().text(),
+        self.assertIsNotNone(manual_layout.itemAt(0).layout())
+        self.assertIs(manual_layout.itemAt(1).widget(), self.window.stats_divider)
+        self.assertEqual(manual_layout.itemAt(2).widget().text(),
                          "直接点击词条名进行勾选，再次点击可取消勾选。")
-        self.assertIs(manual_layout.itemAt(2).layout(), self.window.sub_options_layout)
+        self.assertIs(manual_layout.itemAt(4).layout(), self.window.sub_options_layout)
+        self.assertTrue(self.window.sub_stat_tabs.widget(0).isAncestorOf(self.window.cost))
+        self.assertTrue(self.window.sub_stat_tabs.widget(0).isAncestorOf(self.window.main_stat))
+        self.assertTrue(self.window.sub_stat_tabs.widget(0).isAncestorOf(self.window.minor_stat_label))
+        self.assertFalse(self.window.sub_stat_tabs.widget(1).isAncestorOf(self.window.cost))
         self.assertEqual(self.window.minor_stat_label.contentsMargins().left(), 8)
         self.assertEqual(self.window.clear_sub_stats_button.objectName(), "clearSelection")
         self.assertEqual(self.window.width(), 980)
