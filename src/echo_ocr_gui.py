@@ -201,22 +201,26 @@ class OcrPreview(QWidget):
             choices.addWidget(QLabel(name), 0, column)
             choices.addWidget(widget, 1, column)
         layout.addLayout(choices)
-        evidence = QHBoxLayout()
+        evidence = QWidget()
+        evidence.setFixedHeight(140)
+        evidence_layout = QHBoxLayout(evidence)
+        evidence_layout.setContentsMargins(0, 0, 0, 0)
         picture = QLabel()
         image = QPixmap.fromImage(snapshot.qimage())
         picture.setPixmap(image.scaled(
-            max(1, round(image.width() * 0.5)), max(1, round(image.height() * 0.5)),
+            max(1, round(image.width() * 0.8)), max(1, round(image.height() * 0.8)),
             Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation))
         picture.adjustSize()
         scroll = QScrollArea()
         scroll.setWidget(picture)
-        scroll.setMinimumHeight(80)
-        evidence.addWidget(scroll, 2)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        evidence_layout.addWidget(scroll, 2)
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
         self.raw.setPlainText("\n".join(result.raw_lines) or "（未识别到文字）")
-        evidence.addWidget(self.raw, 3)
-        layout.addLayout(evidence, 1)
+        evidence_layout.addWidget(self.raw, 3)
+        layout.addWidget(evidence)
         self._structural_issues = tuple(issue for issue in result.blocking_issues
                                         if issue not in result.header_issues)
         grid = QGridLayout()
@@ -253,6 +257,7 @@ class OcrPreview(QWidget):
                 " · ".join(("未开孔", row.raw_text)) if row.is_unopened else
                 " · ".join((row.raw_text, *row.issues)) for row in result.rows))
 
+        layout.addStretch(1)
         self.validation = QLabel()
         self.validation.setWordWrap(True)
         layout.addWidget(self.validation)

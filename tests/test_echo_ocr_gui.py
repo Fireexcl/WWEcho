@@ -397,8 +397,14 @@ class EchoOcrGuiTests(unittest.TestCase):
 
     def test_preview_scales_screenshot_and_manual_tab_stays_top_aligned(self):
         preview = self.recognize()
-        picture = preview.findChild(QScrollArea).widget()
-        self.assertEqual((picture.pixmap().width(), picture.pixmap().height()), (5, 3))
+        self.window.sub_stat_tabs.setCurrentWidget(self.ocr.panel)
+        self.app.processEvents()
+        scroll = preview.findChild(QScrollArea)
+        picture = scroll.widget()
+        self.assertEqual((picture.pixmap().width(), picture.pixmap().height()), (8, 5))
+        for bar in (scroll.horizontalScrollBar(), scroll.verticalScrollBar()):
+            self.assertEqual(bar.maximum(), 0)
+            self.assertFalse(bar.isVisible())
         manual = self.window.sub_stat_tabs.widget(0)
         self.window.sub_stat_tabs.setCurrentWidget(manual)
         self.app.processEvents()
@@ -412,19 +418,49 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertGreater(manual.height() - bottom, 100)
         self.assertLess(bottom - top, 400)
 
+    def test_preview_evidence_height_is_fixed_when_window_resizes(self):
+        preview = self.recognize()
+        self.window.sub_stat_tabs.setCurrentWidget(self.ocr.panel)
+        scroll = preview.findChild(QScrollArea)
+        evidence = scroll.parentWidget()
+        self.assertIs(preview.raw.parentWidget(), evidence)
+        self.assertEqual(evidence.minimumHeight(), 120)
+        self.assertEqual(evidence.maximumHeight(), 120)
+        for width, height in ((760, 680), (980, 940), (1380, 1200)):
+            with self.subTest(width=width, height=height):
+                self.window.resize(width, height)
+                self.app.processEvents()
+                self.assertEqual(evidence.height(), 120)
+                self.assertEqual(scroll.height(), 120)
+                self.assertEqual(preview.raw.height(), 120)
+
     def test_recognized_text_uses_at_least_half_preview_width(self):
         self.capture.side_effect = lambda _region, version: CaptureSnapshot(
             bytes([23, 100, 200, 255]) * (1200 * 800), 1200, 800, time.time(), version)
         preview = self.recognize()
         self.window.sub_stat_tabs.setCurrentWidget(self.ocr.panel)
-        picture = preview.findChild(QScrollArea).widget()
-        self.assertEqual((picture.pixmap().width(), picture.pixmap().height()), (600, 400))
+        scroll = preview.findChild(QScrollArea)
+        picture = scroll.widget()
+        self.assertEqual((picture.pixmap().width(), picture.pixmap().height()), (960, 640))
         self.assertEqual(self.engine.calls[0][1], (800, 1200, 3))
         for width in (760, 980, 1380):
             with self.subTest(width=width):
                 self.window.resize(width, self.window.height())
                 self.app.processEvents()
                 self.assertGreaterEqual(preview.raw.width() * 2, preview.width())
+                self.assertEqual(scroll.height(), 120)
+                self.assertEqual(preview.raw.height(), 120)
+        for bar in (scroll.horizontalScrollBar(), scroll.verticalScrollBar()):
+            self.assertGreater(bar.maximum(), 0)
+            self.assertTrue(bar.isVisible())
+        vertical = scroll.verticalScrollBar()
+        vertical.setValue(0)
+        event = QWheelEvent(
+            QPointF(1, 1), QPointF(scroll.viewport().mapToGlobal(QPoint(1, 1))),
+            QPoint(0, -120), QPoint(0, -120), Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+        QApplication.sendEvent(scroll.viewport(), event)
+        self.assertGreater(vertical.value(), 0)
 
     def test_same_selection_does_not_reorder_or_recalculate(self):
         self.window.apply_ocr_sub_stats(EXAMPLE[::-1])
