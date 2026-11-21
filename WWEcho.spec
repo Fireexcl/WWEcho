@@ -4,6 +4,7 @@ from importlib.metadata import distribution
 from pathlib import Path
 import os
 import sys
+from PIL import Image
 
 from PyInstaller.utils.hooks import get_package_paths
 
@@ -19,8 +20,35 @@ APP_NAME = "WWEcho声骸工作台"
 sys.path.insert(0, str(ROOT))
 from src.echo_ocr import MODEL_FILES
 
-APP_ICON = str(ROOT / "icon.png")
+SOURCE_ICON = ROOT / "icon.png"
+if not SOURCE_ICON.is_file():
+    raise SystemExit(f"Required application icon missing: {SOURCE_ICON}")
+
+BUILD_ICON_DIR = ROOT / "build" / "generated-icons"
+BUILD_ICON_DIR.mkdir(parents=True, exist_ok=True)
+
+with Image.open(SOURCE_ICON) as source:
+    icon = source.convert("RGBA")
+    icon.thumbnail((512, 512), Image.Resampling.LANCZOS)
+    square = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    square.alpha_composite(icon, ((512 - icon.width) // 2, (512 - icon.height) // 2))
+
+if IS_WINDOWS:
+    APP_ICON = str(BUILD_ICON_DIR / "WWEcho.ico")
+    square.save(
+        APP_ICON,
+        format="ICO",
+        sizes=((16, 16), (24, 24), (32, 32), (48, 48),
+               (64, 64), (128, 128), (256, 256)),
+    )
+elif IS_MACOS:
+    APP_ICON = str(BUILD_ICON_DIR / "WWEcho.icns")
+    square.save(APP_ICON, format="ICNS")
+else:
+    raise SystemExit(f"Unsupported build platform: {sys.platform}")
+
 datas = [
+    (str(SOURCE_ICON), "."),
     (str(ROOT / "config" / "activation-costs.json"), "config"),
     (str(ROOT / "config" / "echo-stats.json"), "config"),
     (str(ROOT / "config" / "score-weights.json"), "config"),

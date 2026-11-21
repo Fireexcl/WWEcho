@@ -123,6 +123,10 @@ class EchoGuiTests(unittest.TestCase):
             QTest.qWait(10)
         self.assertTrue(predicate(), self.window.strategy_status.text())
 
+    def test_application_icon_is_loaded(self):
+        self.assertFalse(self.window.windowIcon().isNull())
+        self.assertFalse(self.app.windowIcon().isNull())
+
     def choose_example(self):
         stat_ids = ["crit_rate", "crit_dmg", "atk_pct", "energy_regen", "basic_atk_dmg_bonus"]
         for stat_id in list(self.window.selected_sub_stats):

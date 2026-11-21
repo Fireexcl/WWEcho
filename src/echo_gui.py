@@ -13,7 +13,7 @@ from threading import Event
 from typing import Any, Sequence
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSignalBlocker, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QMouseEvent, QResizeEvent
+from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QIcon, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
@@ -385,6 +385,15 @@ class ReconstructionTask(QRunnable):
 class EchoWindow(QMainWindow):
     def __init__(self, *, presets_path: Path | None = None, ocr_settings_path: Path | None = None) -> None:
         super().__init__()
+        icon_path = (
+            Path(sys._MEIPASS) / "icon.png"
+            if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent.parent / "icon.png"
+        )
+        if icon_path.is_file():
+            app_icon = QIcon(str(icon_path))
+            QApplication.instance().setWindowIcon(app_icon)
+            self.setWindowIcon(app_icon)
         self.stats = load_json(DEFAULT_STATS)
         self.defaults = load_json(DEFAULT_WEIGHTS)
         try:
