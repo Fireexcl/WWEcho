@@ -60,6 +60,7 @@ class ParsedSubStat:
     value: float | None
     raw_text: str
     issues: tuple[str, ...] = ()
+    is_unopened: bool = False
 
 
 class Completeness(Enum):
@@ -203,9 +204,51 @@ def _has_additional_stat(text: str, definitions: dict[str, Any]) -> bool:
     return False
 
 
+def _equipment_text(raw: str, definitions: dict[str, Any]) -> str:
+    text = _normalize(raw).lstrip("+")
+    parts = _NAME_VALUE.fullmatch(text)
+    if parts is None:
+        return text
+    label, number_text = parts.groups()
+    names = {_normalize(item["name_zh"]) for item in definitions.values()}
+    names.update(_NAME_ALIASES)
+    names.update(_UNIT_DEPENDENT_NAMES)
+    for name in sorted(names, key=len, reverse=True):
+        if label.endswith(name):
+            return name + number_text
+    return text
+
+
+def _is_unopened(text: str) -> bool:
+    return text.lstrip("+").startswith("强化至")
+
+
+def _equipment_start(lines: Sequence[str], main_pools: dict[str, dict[str, float]],
+                     definitions: dict[str, Any]) -> int:
+    main_ids = {stat_id for pool in main_pools.values() for stat_id in pool}
+    start = 0
+    for index, raw in enumerate(lines):
+        text = _normalize(raw)
+        if text.startswith(_NON_TARGET) or _is_unopened(text):
+            return start
+        parts = _NAME_VALUE.fullmatch(_equipment_text(raw, definitions))
+        if parts is None:
+            continue
+        label, number_text = parts.groups()
+        number = _NUMBER.fullmatch(number_text)
+        stat_id, known, _ = _resolve_name(label, number, definitions)
+        if known:
+            return index if stat_id is None or stat_id in main_ids else start
+        if label and number is not None:
+            return index
+        if not label and ("+" in text or "/" in text):
+            start = index + 1
+    return start
+
+
 def _equipment_stat(raw: str, pools: dict[str, dict[str, float]],
                     definitions: dict[str, Any]) -> ParsedEquipmentStat:
-    parts = _NAME_VALUE.fullmatch(_normalize(raw))
+    parts = _NAME_VALUE.fullmatch(_equipment_text(raw, definitions))
     if parts is None:
         return ParsedEquipmentStat(None, None, raw)
     label, number_text = parts.groups()
@@ -257,12 +300,14 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
     blocking = []
     header_issues = []
     raw_lines = tuple(_group_lines(tokens))
-    main_stat = _equipment_stat(raw_lines[0], main_pools, definitions) if raw_lines else None
-    minor_stat = _equipment_stat(raw_lines[1], minor_pools, definitions) if len(raw_lines) > 1 else None
+    equipment_lines = raw_lines[_equipment_start(raw_lines, main_pools, definitions):]
+    main_stat = _equipment_stat(equipment_lines[0], main_pools, definitions) if equipment_lines else None
+    minor_stat = (_equipment_stat(equipment_lines[1], minor_pools, definitions)
+                  if len(equipment_lines) > 1 else None)
     if main_stat is None or main_stat.stat_id is None:
-        header_issues.append("未识别到第一行主词条，请手动选择。")
+        header_issues.append("未识别到主词条行，请手动选择。")
     if minor_stat is None or minor_stat.stat_id is None:
-        header_issues.append("未识别到第二行固定小词条，请手动选择。")
+        header_issues.append("未识别到固定小词条行，请手动选择。")
 
     cost = None
     if (main_stat is not None and main_stat.stat_id is not None
@@ -303,12 +348,15 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
         else:
             header_issues.append("Cost 无法仅凭词条名称与当前过程值唯一判定，请手动选择。")
 
-    for index, raw in enumerate(raw_lines):
+    for index, raw in enumerate(equipment_lines):
         if _has_additional_stat(_normalize(raw), definitions):
             blocking.append("同一识别行含有多个词条，无法验证行数。请重新截图。")
         if index < 2:
             continue
         text = _normalize(raw)
+        if _is_unopened(text):
+            rows.append(ParsedSubStat(None, None, raw, is_unopened=True))
+            continue
         parts = _NAME_VALUE.fullmatch(text)
         if parts is None:
             unmatched.append(raw)
@@ -365,8 +413,8 @@ def parse_sub_stats(tokens: Sequence[OcrToken], stats: dict[str, Any]) -> OcrRes
             seen.add(row.stat_id)
     if len(rows) > OCR_MAX_STATS:
         blocking.append(f"检测到 {len(rows)} 个副词条行；最多只能导入 {OCR_MAX_STATS} 条。")
-    if not rows:
-        blocking.append("没有识别到副词条行；零条、非目标页面或不可识别画面均不能导入。")
+    if not any(not row.is_unopened for row in rows):
+        blocking.append("没有识别到已开副词条行；零条、非目标页面或不可识别画面均不能导入。")
     review = []
     if unmatched:
         review.append("存在未匹配文字，请核对原图与框选范围。")

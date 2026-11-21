@@ -1,8 +1,10 @@
-"""合成 OCR 文本与坐标，无需安装本地引擎。"""
+"""合成 OCR 文本与坐标；可选本地引擎验证实机截图。"""
 
 import copy
 import sys
 import unittest
+from importlib.util import find_spec
+from pathlib import Path
 from unittest.mock import patch
 
 from src.echo_ocr import (
@@ -17,6 +19,13 @@ def token(text, line=0, x=0, confidence=.98):
 
 
 HEADER = ("暴击率 + 10.5%", "固定攻击 + 40")
+GAME_NAME = "共鸣回响·鸣式·虚造神型 Z C"
+GAME_LEVEL = "+0 > +10 +20000 0/400"
+UNOPENED_ROWS = (
+    "强化至+15并激活辅音属性",
+    "强化至+20并激活辅音属性",
+    "强化至+25并激活辅音属性",
+)
 
 
 class EchoOcrTests(unittest.TestCase):
@@ -90,6 +99,89 @@ class EchoOcrTests(unittest.TestCase):
                 self.assertEqual(result.blocking_issues, ())
                 self.assertEqual((result.cost, result.main_stat.stat_id, result.minor_stat.stat_id),
                                  (cost, main_id, minor_id))
+
+    def test_optional_game_metadata_does_not_shift_equipment_or_sub_stats(self):
+        for prefix in ((), (GAME_LEVEL,), (GAME_NAME, GAME_LEVEL), (GAME_NAME,)):
+            with self.subTest(prefix=prefix):
+                lines = (*prefix, "签暴击伤害 22.8%", "X攻击 78", "防御 70", "攻击 40")
+                result = parse_sub_stats(
+                    [token(text, line) for line, text in reversed(list(enumerate(lines)))],
+                    self.stats)
+                self.assertEqual(result.cost, 4)
+                self.assertEqual((result.main_stat.stat_id, result.main_stat.value),
+                                 ("crit_dmg", 22.8))
+                self.assertEqual((result.minor_stat.stat_id, result.minor_stat.value),
+                                 ("atk_flat", 78))
+                self.assertEqual([(row.stat_id, row.value) for row in result.rows],
+                                 [("def_flat", 70), ("atk_flat", 40)])
+                self.assertEqual(result.raw_lines, lines)
+                self.assertEqual(result.unmatched_text, ())
+                self.assertEqual(result.blocking_issues, ())
+                self.assertEqual(result.review_issues, ())
+
+    def test_equipment_icons_can_be_separate_tokens_and_include_plus_markers(self):
+        data = [
+            token("签", 0), token("暴 击 伤 害", 0, 30), token("２２．８％", 0, 240),
+            token("+ X", 1), token("攻击", 1, 30), token("７８", 1, 240),
+            token("防御", 2, 30), token("70", 2, 240),
+        ]
+        result = parse_sub_stats(data, self.stats)
+        self.assertEqual((result.main_stat.stat_id, result.main_stat.value), ("crit_dmg", 22.8))
+        self.assertEqual((result.minor_stat.stat_id, result.minor_stat.value), ("atk_flat", 78))
+        self.assertEqual(result.main_stat.issues, ())
+        self.assertEqual(result.minor_stat.issues, ())
+        self.assertEqual([(row.stat_id, row.value) for row in result.rows], [("def_flat", 70)])
+        self.assertEqual(result.blocking_issues, ())
+
+    def test_metadata_keeps_ambiguous_and_unrecognized_main_rows_for_correction(self):
+        for main in ("伤害加成 30%", "无法辨认 30%"):
+            with self.subTest(main=main):
+                lines = (GAME_NAME, GAME_LEVEL, main, "攻击 100", "暴击率 10.5%")
+                result = parse_sub_stats([token(text, line) for line, text in enumerate(lines)],
+                                         self.stats)
+                self.assertEqual(result.main_stat.raw_text, main)
+                self.assertIsNone(result.main_stat.stat_id)
+                self.assertEqual((result.minor_stat.stat_id, result.minor_stat.value),
+                                 ("atk_flat", 100))
+                self.assertEqual([(row.stat_id, row.value) for row in result.rows],
+                                 [("crit_rate", 10.5)])
+                self.assertTrue(result.header_issues)
+
+    def test_enhancement_prompts_are_unopened_slots_not_unknown_stat_values(self):
+        prompts = ("＋ 强化至 ＋１５ 并激活辅音属性",
+                   "强化至+I5并激活辅音属性", UNOPENED_ROWS[2])
+        result = self.parse("防御 70", "攻击 40", *prompts)
+        self.assertEqual(len(result.rows), 5)
+        self.assertEqual([row.is_unopened for row in result.rows],
+                         [False, False, True, True, True])
+        self.assertEqual([row.raw_text for row in result.rows[2:]], list(prompts))
+        self.assertTrue(all(row.stat_id is None and row.value is None and not row.issues
+                            for row in result.rows[2:]))
+        self.assertEqual(result.unmatched_text, ())
+        self.assertEqual(result.review_issues, ())
+        self.assertEqual(result.blocking_issues, ())
+        self.assertEqual(result.completeness, Completeness.NEEDS_REVIEW)
+
+    def test_unopened_slots_do_not_make_zero_open_stats_importable(self):
+        result = self.parse(*(f"强化至+{level}并激活辅音属性"
+                              for level in (5, 10, 15, 20, 25)))
+        self.assertEqual(len(result.rows), 5)
+        self.assertTrue(all(row.is_unopened for row in result.rows))
+        self.assertEqual(result.completeness, Completeness.BLOCKED)
+        self.assertTrue(any("零条" in issue for issue in result.blocking_issues))
+
+    def test_slot_limit_counts_both_open_stats_and_unopened_slots(self):
+        result = self.parse("暴击率 10.5%", "暴击伤害 21%", "防御 70", "攻击 40",
+                            *UNOPENED_ROWS[1:])
+        self.assertEqual(len(result.rows), 6)
+        self.assertEqual(sum(row.is_unopened for row in result.rows), 2)
+        self.assertEqual(result.completeness, Completeness.BLOCKED)
+        self.assertTrue(any("6" in issue for issue in result.blocking_issues))
+
+    def test_metadata_without_stat_rows_is_blocked(self):
+        result = parse_sub_stats([token(GAME_NAME), token(GAME_LEVEL, 1)], self.stats)
+        self.assertEqual(result.rows, ())
+        self.assertEqual(result.completeness, Completeness.BLOCKED)
 
     def test_sub_stats_use_same_names_and_unique_missing_character_rule(self):
         result = self.parse("生命 +320", "生命 +7.1%", "击伤害 +21%")
@@ -302,6 +394,35 @@ class EchoOcrTests(unittest.TestCase):
                 self.assertRaises(OcrError) as error:
             LocalOcrEngine().recognize(object())
         self.assertEqual(error.exception.category, "OCR 依赖不可用")
+
+
+@unittest.skipUnless(find_spec("rapidocr_onnxruntime") is not None,
+                     "实机截图回归需要可选 OCR 依赖")
+class EchoOcrSampleTests(unittest.TestCase):
+    def test_sample_with_optional_metadata_and_actual_local_engine(self):
+        import cv2
+        import numpy as np
+
+        image = cv2.imread(str(Path(__file__).with_name("sample.png")))
+        self.assertIsNotNone(image, "缺少或无法读取 tests/sample.png 实机截图")
+        stats = load_json(DEFAULT_STATS)
+        engine = LocalOcrEngine()
+        for top in (0, 40, 80):
+            with self.subTest(crop_top=top):
+                result = parse_sub_stats(engine.recognize(np.ascontiguousarray(image[top:])), stats)
+                self.assertEqual(result.cost, 4)
+                self.assertEqual((result.main_stat.stat_id, result.main_stat.value),
+                                 ("crit_dmg", 22.8))
+                self.assertEqual((result.minor_stat.stat_id, result.minor_stat.value),
+                                 ("atk_flat", 78))
+                self.assertEqual([(row.stat_id, row.value) for row in result.rows
+                                  if not row.is_unopened], [("def_flat", 70), ("atk_flat", 40)])
+                self.assertEqual([row.is_unopened for row in result.rows],
+                                 [False, False, True, True, True])
+                self.assertEqual(result.unmatched_text, ())
+                self.assertEqual(result.blocking_issues, ())
+                self.assertEqual(result.review_issues, ())
+                self.assertEqual(result.completeness, Completeness.NEEDS_REVIEW)
 
 
 if __name__ == "__main__":

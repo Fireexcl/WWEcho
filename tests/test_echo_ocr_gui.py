@@ -216,6 +216,59 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertEqual(len(echo["sub_stats"]), 5)
         self.assertIn("已回填词条", self.ocr.status.text())
 
+    def test_game_metadata_and_unopened_slots_only_apply_open_sub_stats(self):
+        for prefix in ((), ("+0 > +10 +20000 0/400",),
+                       ("共鸣回响·鸣式·虚造神型 Z C", "+0 > +10 +20000 0/400")):
+            with self.subTest(prefix=prefix):
+                self.engine.output = tokens(
+                    *prefix, "签暴击伤害 22.8%", "X攻击 78", "防御 70", "攻击 40",
+                    "强化至+15并激活辅音属性", "强化至+20并激活辅音属性",
+                    "强化至+25并激活辅音属性")
+                preview = self.recognize()
+                self.assertEqual(preview.cost_choice.currentData(), 4)
+                self.assertEqual(preview.main_choice.currentData(), "crit_dmg")
+                self.assertEqual(preview.minor_choice.currentData(), "atk_flat")
+                self.assertEqual(len(preview.rows), 2)
+                self.assertEqual(sum(label.text() == "未开孔"
+                                     for label in preview.findChildren(QLabel)), 3)
+                self.assertIn("2 条已开副词条", preview.notice.text())
+                self.assertIn("3 条未开孔", preview.notice.text())
+                self.assertEqual(preview.selection().sub_stats,
+                                 (SubStatEntry("def_flat", 70), SubStatEntry("atk_flat", 40)))
+                self.confirm(preview)
+                self.assertEqual(self.window.current_echo()["sub_stats"],
+                                 [{"name": "def_flat", "value": 70},
+                                  {"name": "atk_flat", "value": 40}])
+                self.assertEqual(self.window.selected_count.text(), "2 / 5")
+                self.assertTrue(all(not button.isEnabled()
+                                    for button in self.window.reconstruction_lock_buttons))
+
+    def test_unopened_slot_does_not_shift_editable_row_indices(self):
+        self.engine.output = tokens(
+            "暴击伤害 22.8%", "攻击 78", "防御 70",
+            "强化至+15并激活辅音属性", "暴击率 105%")
+        preview = self.recognize()
+        self.assertEqual(len(preview.rows), 2)
+        self.assertFalse(preview.confirm.isEnabled())
+        _, stat, tier = preview.rows[1]
+        stat.setCurrentIndex(stat.findData("crit_dmg"))
+        tier.setCurrentIndex(tier.findData(21))
+        self.assertEqual(preview.selection().sub_stats,
+                         (SubStatEntry("def_flat", 70), SubStatEntry("crit_dmg", 21)))
+        self.confirm(preview)
+        self.assertEqual(self.window.selected_count.text(), "2 / 5")
+
+    def test_only_unopened_slots_cannot_replace_existing_input(self):
+        self.engine.output = tokens(
+            "暴击伤害 8.8%", "攻击 30",
+            *(f"强化至+{level}并激活辅音属性" for level in (5, 10, 15, 20, 25)))
+        before = self.window.current_echo()
+        preview = self.recognize()
+        self.assertFalse(preview.confirm.isEnabled())
+        self.assertIn("未开孔", preview.raw.toPlainText())
+        preview.accept()
+        self.assertEqual(self.window.current_echo(), before)
+
     def test_region_two_dropdowns_ignore_wheel_and_ocr_labels_are_selectable(self):
         preview = self.recognize()
         self.assertFalse(hasattr(preview, "summary"))
@@ -270,7 +323,7 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertFalse(preview.confirm.isEnabled())
         preview.main_choice.setCurrentIndex(preview.main_choice.findData("havoc_dmg_bonus"))
         self.assertEqual(preview.cost_choice.currentData(), 3)
-        self.assertNotIn("未识别到第一行主词条", preview.notice.text())
+        self.assertNotIn("未识别到主词条行", preview.notice.text())
         _, stat, tier = preview.rows[0]
         stat.setCurrentIndex(stat.findData("crit_dmg"))
         tier.setCurrentIndex(tier.findData(21))

@@ -218,9 +218,13 @@ class OcrPreview(QWidget):
         layout.addLayout(evidence, 1)
         self._structural_issues = tuple(issue for issue in result.blocking_issues
                                         if issue not in result.header_issues)
+        unopened_count = sum(row.is_unopened for row in result.rows)
+        self._row_notice = f"识别到 {len(result.rows) - unopened_count} 条已开副词条"
+        if unopened_count:
+            self._row_notice += f"，{unopened_count} 条未开孔"
+        self._row_notice += "；可在下方校正已开词条或档位。"
         messages = self._structural_issues + result.header_issues + result.review_issues
-        notice_text = "\n".join(messages) if messages else (
-            f"识别到 {len(result.rows)} 条副词条；将按识别数量回填，可在下方校正词条或档位。")
+        notice_text = "\n".join(messages) if messages else self._row_notice
         notice = QLabel(notice_text)
         notice.setWordWrap(True)
         notice.setTextFormat(Qt.TextFormat.PlainText)
@@ -231,6 +235,12 @@ class OcrPreview(QWidget):
         self.rows: list[tuple[QLabel, QComboBox, QComboBox]] = []
         if not self._structural_issues:
             for index, row in enumerate(result.rows):
+                if row.is_unopened:
+                    label = QLabel("未开孔")
+                    label.setToolTip(row.raw_text)
+                    grid.addWidget(label, index, 0, 1, 3)
+                    continue
+                editor_index = len(self.rows)
                 label = QLabel(" · ".join((row.raw_text, *row.issues)))
                 label.setWordWrap(True)
                 label.setTextFormat(Qt.TextFormat.PlainText)
@@ -244,13 +254,14 @@ class OcrPreview(QWidget):
                     grid.addWidget(widget, index, col)
                 if row is not None and row.stat_id is not None:
                     stat.setCurrentIndex(stat.findData(row.stat_id))
-                self._refresh_tiers(index)
+                self._refresh_tiers(editor_index)
                 if row is not None and row.value is not None:
                     tier.setCurrentIndex(tier.findData(row.value))
-                stat.currentIndexChanged.connect(lambda *_, i=index: self._change_stat(i))
+                stat.currentIndexChanged.connect(lambda *_, i=editor_index: self._change_stat(i))
                 tier.currentIndexChanged.connect(self._update_confirm)
         elif result.rows:
             self.raw.appendPlainText("\n解析行（不可应用）：\n" + "\n".join(
+                " · ".join(("未开孔", row.raw_text)) if row.is_unopened else
                 " · ".join((row.raw_text, *row.issues)) for row in result.rows))
 
         self.validation = QLabel()
@@ -345,8 +356,7 @@ class OcrPreview(QWidget):
             messages = (self._structural_issues
                         + (() if header_valid else self.result_data.header_issues)
                         + self.result_data.review_issues)
-            self.notice.setText("\n".join(messages) if messages else
-                                f"识别到 {len(self.result_data.rows)} 条副词条；可在下方校正。")
+            self.notice.setText("\n".join(messages) if messages else self._row_notice)
         try:
             self.selection()
         except ValueError as exc:
