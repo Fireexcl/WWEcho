@@ -19,6 +19,7 @@ APP_NAME = "WWEcho声骸工作台"
 sys.path.insert(0, str(ROOT))
 from src.echo_ocr import MODEL_FILES
 
+APP_ICON = str(ROOT / "icon.png")
 datas = [
     (str(ROOT / "config" / "activation-costs.json"), "config"),
     (str(ROOT / "config" / "echo-stats.json"), "config"),
@@ -72,6 +73,7 @@ exe = EXE(
     [],
     exclude_binaries=not IS_ONEFILE,
     name=APP_NAME,
+    icon=APP_ICON,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -97,6 +99,7 @@ if IS_MACOS:
     app = BUNDLE(
         collection,
         name=APP_NAME + ".app",
+        icon=APP_ICON,
         bundle_identifier="com.fireexcl.wwecho",
         info_plist={
             "CFBundleDisplayName": APP_NAME,
