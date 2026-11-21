@@ -201,9 +201,9 @@ class EchoOcrGuiTests(unittest.TestCase):
         )
         preview = self.recognize()
         self.assertEqual(len(preview.rows), 5)
-        self.assertNotIn("Cost", preview.summary.text())
-        self.assertNotIn("主词条", preview.summary.text())
-        self.assertIn("固定小词条", preview.summary.text())
+        self.assertFalse(hasattr(preview, "summary"))
+        self.assertFalse(any("将一起回填" in label.text()
+                             for label in preview.findChildren(QLabel)))
         self.assertTrue(preview.confirm.isEnabled(), preview.validation.text())
         with patch.object(self.window, "calculate", wraps=self.window.calculate) as calculate:
             self.confirm(preview)
@@ -218,6 +218,9 @@ class EchoOcrGuiTests(unittest.TestCase):
 
     def test_region_two_dropdowns_ignore_wheel_and_ocr_labels_are_selectable(self):
         preview = self.recognize()
+        self.assertFalse(hasattr(preview, "summary"))
+        self.assertFalse(any("将一起回填" in label.text()
+                             for label in preview.findChildren(QLabel)))
         combos = [self.window.cost, self.window.main_stat,
                   *self.window.sub_tier_inputs.values(), preview.cost_choice,
                   preview.main_choice, preview.minor_choice,

@@ -171,13 +171,6 @@ class OcrPreview(QWidget):
         self._invalidated = False
         self._finished = False
         layout = QVBoxLayout(self)
-        hint = QLabel("识别到的主词条、固定小词条、Cost 和副词条将一起回填；识别到五条副词条时会按开满状态评分。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        self.summary = QLabel()
-        self.summary.setWordWrap(True)
-        self.summary.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.summary)
         choices = QGridLayout()
         self.cost_choice = WheelSafeComboBox()
         self.cost_choice.addItem("请选择 Cost", None)
@@ -345,12 +338,6 @@ class OcrPreview(QWidget):
     def _update_confirm(self) -> None:
         cost = self.cost_choice.currentData()
         main, minor = self.main_choice.currentData(), self.minor_choice.currentData()
-        definitions = self._stats["stat_definitions"]
-        confidence = self.result_data.confidence
-        self.summary.setText(
-            f"固定小词条 {definitions[minor]['name_zh'] if minor is not None else '未识别'} · "
-            f"副词条 {len(self.result_data.rows)} 条"
-            + (f" · 平均置信度 {confidence:.0%}" if confidence is not None else ""))
         if not self._invalidated:
             header_valid = (cost is not None and main is not None and minor is not None
                             and main in self._stats["main_stats"]["max_values_by_cost"][str(cost)]
