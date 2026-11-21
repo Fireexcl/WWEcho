@@ -210,7 +210,7 @@ class OcrPreview(QWidget):
         picture.adjustSize()
         scroll = QScrollArea()
         scroll.setWidget(picture)
-        scroll.setMinimumHeight(140)
+        scroll.setMinimumHeight(80)
         evidence.addWidget(scroll, 2)
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
