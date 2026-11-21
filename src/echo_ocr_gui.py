@@ -205,17 +205,17 @@ class OcrPreview(QWidget):
         picture = QLabel()
         image = QPixmap.fromImage(snapshot.qimage())
         picture.setPixmap(image.scaled(
-            max(1, round(image.width() * 0.8)), max(1, round(image.height() * 0.8)),
+            max(1, round(image.width() * 0.5)), max(1, round(image.height() * 0.5)),
             Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation))
         picture.adjustSize()
         scroll = QScrollArea()
         scroll.setWidget(picture)
         scroll.setMinimumHeight(140)
-        evidence.addWidget(scroll, 3)
+        evidence.addWidget(scroll, 2)
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
         self.raw.setPlainText("\n".join(result.raw_lines) or "（未识别到文字）")
-        evidence.addWidget(self.raw, 2)
+        evidence.addWidget(self.raw, 3)
         layout.addLayout(evidence, 1)
         self._structural_issues = tuple(issue for issue in result.blocking_issues
                                         if issue not in result.header_issues)
