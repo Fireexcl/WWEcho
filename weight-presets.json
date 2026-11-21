@@ -184,6 +184,616 @@
                     "resonance_liberation_dmg_bonus": 0.0
                 }
             }
+        },
+        {
+            "id": "a8f828498a7444938e9e6b1f4d1b2fc5",
+            "name": "清宵",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.491,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.206,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.206,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.161,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.292,
+                        "crit_dmg": 0.146,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.027
+                    },
+                    "4": {
+                        "atk_flat": 0.016
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.11,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.09,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.187,
+                    "heavy_atk_dmg_bonus": 0.306,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.264
+                }
+            }
+        },
+        {
+            "id": "979be54f47254e1487ca0ece72eb65aa",
+            "name": "秧秧玄翎",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.537,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.247,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.247,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.182,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.265,
+                        "crit_dmg": 0.166,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.022
+                    },
+                    "4": {
+                        "atk_flat": 0.016
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.095,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 0.96,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.1,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.074,
+                    "heavy_atk_dmg_bonus": 0.945,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
+        },
+        {
+            "id": "1165cf0c38d746f0a6a5b3803f4b9bf1",
+            "name": "穗穗",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.4,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.3,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.3,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.28,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.35,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.0,
+                        "crit_dmg": 0.2,
+                        "healing_bonus": 0.47
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.003
+                    },
+                    "3": {
+                        "atk_flat": 0.0
+                    },
+                    "4": {
+                        "atk_flat": 0.0
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.01,
+                    "atk_flat": 0.0,
+                    "def_flat": 0.0,
+                    "hp_pct": 1.2,
+                    "atk_pct": 0.0,
+                    "def_pct": 0.0,
+                    "crit_rate": 0.1,
+                    "crit_dmg": 0.33,
+                    "energy_regen": 1.0,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.12,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
+        },
+        {
+            "id": "a3e1bfbce969487f9e925f8734401859",
+            "name": "洛瑟拉(霜渐)",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.6,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.3,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.3,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.5,
+                        "crit_dmg": 0.25,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.11,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.2,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.0,
+                    "basic_atk_dmg_bonus": 0.9,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
+        },
+        {
+            "id": "346956aaf90e4119a8f6fc5aaad73fcb",
+            "name": "洛瑟拉(声骸)",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.6,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.3,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.3,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.4,
+                        "crit_dmg": 0.24,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.12,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.3,
+                    "def_pct": 0.0,
+                    "crit_rate": 1.8,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.0,
+                    "basic_atk_dmg_bonus": 0.2,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.12,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
+        },
+        {
+            "id": "12a13098229d4ec9b437b36a72536fd3",
+            "name": "达妮娅",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.7,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.3,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.3,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.32,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.48,
+                        "crit_dmg": 0.24,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.02
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.11,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.2,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.85
+                }
+            }
+        },
+        {
+            "id": "f1432c39e0f843a9a2ffe4cfbb808a0f",
+            "name": "绯雪",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.529,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.249,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.249,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.215,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.242,
+                        "crit_dmg": 0.161,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.021
+                    },
+                    "4": {
+                        "atk_flat": 0.016
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.1,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.1,
+                    "def_pct": 0.0,
+                    "crit_rate": 1.7,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.25,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.097,
+                    "resonance_liberation_dmg_bonus": 1.053
+                }
+            }
+        },
+        {
+            "id": "d22b64cc444c41fba473aa75b48aa4bd",
+            "name": "西格莉卡",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.5,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.225,
+                        "aero_dmg_bonus": 0.275,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.25,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.4,
+                        "crit_dmg": 0.2,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.1,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.1,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.8,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.0
+                }
+            }
+        },
+        {
+            "id": "c536ad08a5cf4310903143c4cd740b87",
+            "name": "莫宁",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.6
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.26,
+                        "energy_regen": 0.35,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.25,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.0
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.0,
+                        "def_pct": 0.3,
+                        "crit_rate": 0.0,
+                        "crit_dmg": 0.2,
+                        "healing_bonus": 0.44
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.0
+                    },
+                    "4": {
+                        "atk_flat": 0.0
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.0,
+                    "def_flat": 0.1,
+                    "hp_pct": 0.0,
+                    "atk_pct": 0.0,
+                    "def_pct": 1.25,
+                    "crit_rate": 0.1,
+                    "crit_dmg": 0.3,
+                    "energy_regen": 1.3,
+                    "basic_atk_dmg_bonus": 0.0,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.44
+                }
+            }
+        },
+        {
+            "id": "a66a57276bc7474fa96d178f94c56ae2",
+            "name": "琳奈",
+            "weights": {
+                "schema_version": 1,
+                "description": "GUI 用户手动权重",
+                "main_stats": {
+                    "1": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.4,
+                        "def_pct": 0.0
+                    },
+                    "3": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "energy_regen": 0.0,
+                        "aero_dmg_bonus": 0.0,
+                        "glacio_dmg_bonus": 0.0,
+                        "fusion_dmg_bonus": 0.0,
+                        "electro_dmg_bonus": 0.0,
+                        "havoc_dmg_bonus": 0.0,
+                        "spectro_dmg_bonus": 0.275
+                    },
+                    "4": {
+                        "hp_pct": 0.0,
+                        "atk_pct": 0.275,
+                        "def_pct": 0.0,
+                        "crit_rate": 0.5,
+                        "crit_dmg": 0.25,
+                        "healing_bonus": 0.0
+                    }
+                },
+                "minor_stats": {
+                    "1": {
+                        "hp_flat": 0.0
+                    },
+                    "3": {
+                        "atk_flat": 0.025
+                    },
+                    "4": {
+                        "atk_flat": 0.025
+                    }
+                },
+                "sub_stats": {
+                    "hp_flat": 0.0,
+                    "atk_flat": 0.1,
+                    "def_flat": 0.0,
+                    "hp_pct": 0.0,
+                    "atk_pct": 1.05,
+                    "def_pct": 0.0,
+                    "crit_rate": 2.0,
+                    "crit_dmg": 1.0,
+                    "energy_regen": 0.2,
+                    "basic_atk_dmg_bonus": 0.792,
+                    "heavy_atk_dmg_bonus": 0.0,
+                    "resonance_skill_dmg_bonus": 0.0,
+                    "resonance_liberation_dmg_bonus": 0.253
+                }
+            }
         }
     ]
 }

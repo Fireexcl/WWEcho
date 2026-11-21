@@ -41,8 +41,8 @@ QPushButton#sectionToggle:focus { border: 1px solid #9fb9ed; }
 QLabel { background: transparent; }
 QLabel#title { font-size: 30px; font-weight: 700; color: #172b4d; }
 QLabel#muted, QLabel#metricCaption { color: #65758b; font-size: 12px; }
-QLabel#weightPresetSummary { color: #65758b; font-size: 12px; font-weight: 400;
-    padding-right: 20px; }
+QLabel#sectionHeaderTitle { color: #334766; font-size: 16px; font-weight: 600; }
+QLabel#weightPresetSummary { color: #65758b; font-size: 12px; font-weight: 400; }
 QLabel#weightPresetSummary[expanded="false"] { color: #2563eb; }
 QLabel#score { font-size: 52px; font-weight: 700; color: #2563eb;
               background: #edf3ff; border-radius: 12px; padding: 12px 20px; }
@@ -157,20 +157,27 @@ class CollapsibleSection(QFrame):
         self.toggle_button.setChecked(True)
         self.toggle_button.setAccessibleName(self.section_title)
         self.toggle_button.toggled.connect(self._set_expanded)
-        if summary is None:
-            layout.addWidget(self.toggle_button)
-        else:
-            header = QHBoxLayout()
-            header.setContentsMargins(0, 0, 0, 0)
-            header.setSpacing(0)
-            header.addWidget(self.toggle_button)
+        self.header_title: QLabel | None = None
+        if summary is not None:
+            header = QHBoxLayout(self.toggle_button)
+            header.setContentsMargins(20, 14, 20, 14)
+            header.setSpacing(12)
+            self.header_title = QLabel()
+            self.header_title.setObjectName("sectionHeaderTitle")
+            self.header_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            summary.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            header.addWidget(self.header_title)
             header.addWidget(summary, 1)
-            layout.addLayout(header)
+        layout.addWidget(self.toggle_button)
         layout.addWidget(content)
         self._set_expanded(True)
 
     def _set_expanded(self, expanded: bool) -> None:
-        self.toggle_button.setText(f"{'▼' if expanded else '▶'}  {self.section_title}")
+        title = f"{'▼' if expanded else '▶'}  {self.section_title}"
+        if self.header_title is None:
+            self.toggle_button.setText(title)
+        else:
+            self.header_title.setText(title)
         self.toggle_button.setToolTip("点击折叠此区域" if expanded else "点击展开此区域")
         self.content.setVisible(expanded)
         if self.summary is not None:
@@ -477,9 +484,12 @@ class EchoWindow(QMainWindow):
     def _configure_interactions(self) -> None:
         for widget in self.findChildren(QWidget):
             if isinstance(widget, QLabel):
-                widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
-                                               | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-                widget.setCursor(Qt.CursorShape.IBeamCursor)
+                if widget.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents):
+                    widget.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+                else:
+                    widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                                   | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+                    widget.setCursor(Qt.CursorShape.IBeamCursor)
             elif isinstance(widget, (QAbstractButton, QComboBox)):
                 widget.setCursor(Qt.CursorShape.PointingHandCursor if widget.isEnabled()
                                  else Qt.CursorShape.ArrowCursor)

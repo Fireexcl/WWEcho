@@ -156,6 +156,10 @@ class EchoGuiTests(unittest.TestCase):
         for label in self.window.findChildren(QLabel):
             with self.subTest(text=label.text()):
                 flags = label.textInteractionFlags()
+                if label in (self.window.weight_preset_summary, self.window.sections[0].header_title):
+                    self.assertEqual(flags, Qt.TextInteractionFlag.NoTextInteraction)
+                    self.assertEqual(label.cursor().shape(), Qt.CursorShape.PointingHandCursor)
+                    continue
                 self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByMouse)
                 self.assertTrue(flags & Qt.TextInteractionFlag.TextSelectableByKeyboard)
                 self.assertFalse(flags & Qt.TextInteractionFlag.TextEditable)
@@ -260,12 +264,13 @@ class EchoGuiTests(unittest.TestCase):
         original = self.window.current_weights(), self.window.current_echo(), self.window.target.value()
         for index, section in enumerate(self.window.sections):
             self.assertTrue(section.toggle_button.isChecked())
-            self.assertTrue(section.toggle_button.text().startswith("▼"))
+            title = section.header_title if section.header_title is not None else section.toggle_button
+            self.assertTrue(title.text().startswith("▼"))
             expanded_height = section.sizeHint().height()
             QTest.mouseClick(section.toggle_button, Qt.MouseButton.LeftButton)
             self.app.processEvents()
             self.assertTrue(section.content.isHidden())
-            self.assertTrue(section.toggle_button.text().startswith("▶"))
+            self.assertTrue(title.text().startswith("▶"))
             self.assertLess(section.sizeHint().height(), expanded_height)
             for other in self.window.sections[index + 1:]:
                 self.assertFalse(other.content.isHidden())
@@ -275,7 +280,8 @@ class EchoGuiTests(unittest.TestCase):
             section.toggle_button.setFocus()
             QTest.keyClick(section.toggle_button, Qt.Key.Key_Space)
             self.assertFalse(section.content.isHidden())
-            self.assertTrue(section.toggle_button.text().startswith("▼"))
+            title = section.header_title if section.header_title is not None else section.toggle_button
+            self.assertTrue(title.text().startswith("▼"))
 
     def test_collapsed_results_receive_background_strategy_updates(self):
         section = self.window.sections[2]
@@ -296,13 +302,42 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(summary.textFormat(), Qt.TextFormat.PlainText)
         self.assertFalse(summary.font().bold())
         self.assertLess(summary.font().pixelSize(), section.toggle_button.font().pixelSize())
-        self.assertGreaterEqual(summary.x(), section.toggle_button.geometry().right())
+        self.assertGreaterEqual(summary.x(), section.header_title.geometry().right())
         for expanded, color in ((True, "#65758b"), (False, "#2563eb"), (True, "#65758b")):
             section.toggle_button.setChecked(expanded)
             self.app.processEvents()
             self.assertFalse(summary.isHidden())
             self.assertEqual(summary.palette().windowText().color().name(), color)
             self.assertFalse(summary.font().bold())
+
+    def test_weight_preset_header_entire_row_is_clickable(self):
+        self.window.show()
+        self.app.processEvents()
+        section = self.window.sections[0]
+        button = section.toggle_button
+        original = self.window.current_weights()
+        for name in ("短方案", "长" * 80):
+            with patch("src.echo_gui.QInputDialog.getText", return_value=(name, True)):
+                self.window.rename_weights()
+            self.app.processEvents()
+            for area in ("title", "summary", "right_edge"):
+                for expanded in (True, False):
+                    with self.subTest(name=name, area=area, expanded=expanded):
+                        button.setChecked(expanded)
+                        self.app.processEvents()
+                        if area == "right_edge":
+                            point = QPoint(button.width() - 5, button.height() // 2)
+                        else:
+                            label = (section.header_title if area == "title"
+                                     else self.window.weight_preset_summary)
+                            point = label.mapTo(button, label.rect().center())
+                        target = section.childAt(button.mapTo(section, point))
+                        self.assertIs(target, button)
+                        QTest.mouseClick(target, Qt.MouseButton.LeftButton, pos=point)
+                        self.assertEqual(button.isChecked(), not expanded)
+                        self.assertEqual(section.content.isHidden(), expanded)
+                        self.assertEqual(self.window.current_weights(), original)
+                        self.assertEqual(button.width(), section.contentsRect().width() - 2)
 
     def test_weight_preset_header_summary_tracks_current_name(self):
         original_id = self.window.preset_store.selected_id

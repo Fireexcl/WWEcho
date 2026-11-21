@@ -29,7 +29,7 @@ WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算�
 - 可以按副词条、Cost 1/3/4 主词条和固定小词条，分别设置权重。
 - 【!!】不同的权重会影响评分计算和推荐结果。
 - 修改后可保存当前方案或另存为新方案，也可重命名、删除和切换方案。
-- 区域 1 标题右侧以不加粗的小字显示当前权重方案名，折叠后标注变为蓝色。
+- 区域1折叠后也可以显示当前方案。
 - 支持导出全部方案进行分享，导入时可以按方案 ID 去重。
 - 方案数据保存在所在目录的 `weight-presets.json`
 
@@ -68,6 +68,8 @@ python3 -m venv .venv
 - macOS：在 macOS 项目目录执行 `./build-macos.sh`，生成 `dist/WWEcho声骸工作台.app`。应用架构与构建机的 Python 架构一致，例如 Apple Silicon 上构建得到 arm64 应用。
 
 构建脚本会安装 `requirements-build.txt` 中的 PyInstaller 依赖。Windows 与 macOS 应分别在对应系统上构建。
+
+构建时使用项目根目录的 `icon.png` 作为应用图标。
 
 macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初始方案库模板；缺失时可先运行源码版 GUI 创建，或从已有方案库复制到该位置。
 
