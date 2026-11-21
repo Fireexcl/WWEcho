@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 from PySide6.QtCore import QIODevice, QObject, QRunnable, QSaveFile, QSignalBlocker, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
+    QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
     QPlainTextEdit, QPushButton, QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -170,6 +170,7 @@ class OcrPreview(QWidget):
         self.stamp = stamp
         self._invalidated = False
         self._finished = False
+        self._applied_selection: OcrSelection | None = None
         layout = QVBoxLayout(self)
         choices = QGridLayout()
         self.cost_choice = WheelSafeComboBox()
@@ -218,18 +219,6 @@ class OcrPreview(QWidget):
         layout.addLayout(evidence, 1)
         self._structural_issues = tuple(issue for issue in result.blocking_issues
                                         if issue not in result.header_issues)
-        unopened_count = sum(row.is_unopened for row in result.rows)
-        self._row_notice = f"识别到 {len(result.rows) - unopened_count} 条已开副词条"
-        if unopened_count:
-            self._row_notice += f"，{unopened_count} 条未开孔"
-        self._row_notice += "；可在下方校正已开词条或档位。"
-        messages = self._structural_issues + result.header_issues + result.review_issues
-        notice_text = "\n".join(messages) if messages else self._row_notice
-        notice = QLabel(notice_text)
-        notice.setWordWrap(True)
-        notice.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(notice)
-        self.notice = notice
         grid = QGridLayout()
         layout.addLayout(grid)
         self.rows: list[tuple[QLabel, QComboBox, QComboBox]] = []
@@ -269,6 +258,10 @@ class OcrPreview(QWidget):
         layout.addWidget(self.validation)
         buttons = QHBoxLayout()
         buttons.addStretch()
+        self.select_button = QPushButton("重新设置识别区域")
+        self.recognize_button = QPushButton("截图识别")
+        for button in (self.select_button, self.recognize_button):
+            buttons.addWidget(button)
         self.cancel_button = QPushButton("取消")
         self.confirm = QPushButton("确认并回填")
         self.confirm.setDefault(True)
@@ -346,29 +339,35 @@ class OcrPreview(QWidget):
         entries = validate_selection(entries, self._stats)
         return OcrSelection(cost, main, minor, entries)
 
+    def can_auto_apply(self) -> bool:
+        result = self.result_data
+        if result.blocking_issues or result.unmatched_text or result.cost is None:
+            return False
+        if any(item is None or item.stat_id is None or item.value is None
+               for item in (result.main_stat, result.minor_stat)):
+            return False
+        return self.confirm.isEnabled()
+
+    @property
+    def automatically_applied(self) -> bool:
+        return self._applied_selection is not None
+
+    def mark_applied(self) -> None:
+        self._applied_selection = self.selection()
+        self._update_confirm()
+
     def _update_confirm(self) -> None:
-        cost = self.cost_choice.currentData()
-        main, minor = self.main_choice.currentData(), self.minor_choice.currentData()
-        if not self._invalidated:
-            header_valid = (cost is not None and main is not None and minor is not None
-                            and main in self._stats["main_stats"]["max_values_by_cost"][str(cost)]
-                            and minor in self._stats["minor_stats"]["max_values_by_cost"][str(cost)])
-            messages = (self._structural_issues
-                        + (() if header_valid else self.result_data.header_issues)
-                        + self.result_data.review_issues)
-            self.notice.setText("\n".join(messages) if messages else self._row_notice)
         try:
-            self.selection()
+            selection = self.selection()
         except ValueError as exc:
             self.validation.setText(str(exc))
             self.confirm.setEnabled(False)
         else:
             self.validation.clear()
-            self.confirm.setEnabled(True)
+            self.confirm.setEnabled(selection != self._applied_selection)
 
     def invalidate(self) -> None:
         self._invalidated = True
-        self.notice.setText("输入或识别区域已变更，当前结果不可回填。")
         self._update_confirm()
 
     def accept(self) -> None:
@@ -438,20 +437,24 @@ class OcrController(QObject):
         actions.addWidget(self.recognize_button)
         actions.addStretch()
         controls_layout.addLayout(actions)
-        appearance = QHBoxLayout()
+        self.appearance_controls = QWidget(window)
+        appearance = QHBoxLayout(self.appearance_controls)
+        appearance.setContentsMargins(0, 0, 0, 0)
+        appearance.setSpacing(8)
         self.opacity_text = QLabel()
+        self.opacity_text.setObjectName("muted")
         self.opacity = QSlider(Qt.Orientation.Horizontal)
         self.opacity.setRange(50, 100)
+        self.opacity.setFixedWidth(96)
         self.opacity.setAccessibleName("窗口透明度")
         self.opacity.setValue(self.settings.opacity)
-        self.on_top = QCheckBox("置顶")
+        self.on_top = QPushButton("置顶")
+        self.on_top.setObjectName("onTop")
+        self.on_top.setCheckable(True)
         self.on_top.setChecked(self.settings.on_top)
-        self.reset = QPushButton("恢复窗口默认")
         appearance.addWidget(self.opacity_text)
-        appearance.addWidget(self.opacity, 1)
+        appearance.addWidget(self.opacity)
         appearance.addWidget(self.on_top)
-        appearance.addWidget(self.reset)
-        controls_layout.addLayout(appearance)
         self.status = QLabel()
         self.settings_status = QLabel()
         for label in (self.status, self.settings_status):
@@ -470,7 +473,6 @@ class OcrController(QObject):
         self.recognize_button.clicked.connect(self.recognize)
         self.opacity.valueChanged.connect(self._change_opacity)
         self.on_top.toggled.connect(self._change_on_top)
-        self.reset.clicked.connect(self._reset_appearance)
 
     def _timer(self, interval: int, callback: Callable[[], None]) -> QTimer:
         timer = QTimer(self)
@@ -503,20 +505,16 @@ class OcrController(QObject):
         WindowAppearance.from_window(self.window).restore(self.window, on_top=checked)
         self._save_settings()
 
-    def _reset_appearance(self) -> None:
-        with QSignalBlocker(self.opacity), QSignalBlocker(self.on_top):
-            self.opacity.setValue(100)
-            self.on_top.setChecked(False)
-        self._change_opacity(100)
-        self._change_on_top(False)
-
     def _set_state(self, state: _State, message: str) -> None:
         self._state = state
         idle = state in (_State.UNCONFIGURED, _State.READY)
-        self.select_button.setEnabled(idle or state is _State.RECOGNIZING)
-        self.recognize_button.setEnabled(state is _State.READY and self._task is None)
-        for control in (self.opacity, self.on_top, self.reset):
-            control.setEnabled(idle or state is _State.RECOGNIZING)
+        self.select_button.setEnabled(idle or state in (_State.RECOGNIZING, _State.REVIEW))
+        self.recognize_button.setEnabled(state in (_State.READY, _State.REVIEW) and self._task is None)
+        if self._preview is not None:
+            self._preview.select_button.setEnabled(self.select_button.isEnabled())
+            self._preview.recognize_button.setEnabled(self.recognize_button.isEnabled())
+        for control in (self.opacity, self.on_top):
+            control.setEnabled(idle or state in (_State.RECOGNIZING, _State.REVIEW))
         self.status.setText(message)
 
     def _idle(self, message: str) -> None:
@@ -536,6 +534,8 @@ class OcrController(QObject):
     def select_region(self) -> None:
         if not self.select_button.isEnabled():
             return
+        if self._preview is not None:
+            self._preview.cancel()
         self._current = None
         self._snapshot = None
         self._set_state(_State.SELECTING, "正在准备框选…")
@@ -578,7 +578,7 @@ class OcrController(QObject):
         if self._state is _State.RECOGNIZING:
             self._snapshot = None
             self.status.setText("录入已变更，正在执行的识别结果将丢弃。")
-        if self._preview is not None:
+        if self._preview is not None and self._state is not _State.APPLYING:
             self._preview.invalidate()
 
     def recognize(self) -> None:
@@ -587,8 +587,10 @@ class OcrController(QObject):
             if self._state is _State.UNCONFIGURED:
                 self.status.setText("请先设置识别区域。")
             return
-        if self._state is not _State.READY or self._task is not None:
+        if self._state not in (_State.READY, _State.REVIEW) or self._task is not None:
             return
+        if self._preview is not None:
+            self._preview.cancel()
         try:
             resolve_screen(region)
         except CaptureError as exc:
@@ -649,11 +651,29 @@ class OcrController(QObject):
             self._idle(f"{outcome.payload.category}：{outcome.payload.message}")
             return
         self._preview = OcrPreview(self.pages, snapshot, outcome.payload, self.stats, outcome.stamp)
-        self._preview.finished.connect(self._preview_finished)
-        self.pages.addWidget(self._preview)
-        self.pages.setCurrentWidget(self._preview)
+        preview = self._preview
+        preview.finished.connect(self._preview_finished)
+        preview.select_button.clicked.connect(self.select_region)
+        preview.recognize_button.clicked.connect(self.recognize)
+        self.pages.addWidget(preview)
+        self.pages.setCurrentWidget(preview)
+        self._set_state(_State.REVIEW, "识别完成；请在当前标签页查看或校正结果。")
+        if preview.can_auto_apply():
+            self._set_state(_State.APPLYING, "正在自动回填词条并更新评分…")
+            try:
+                changed = self._apply(preview.selection())
+            except (ValueError, RuntimeError) as exc:
+                preview.validation.setText(f"自动回填失败：{exc}。可校正后重试，或重新截图。")
+                self._set_state(_State.REVIEW, f"自动回填失败：{exc}")
+            else:
+                if self._state is _State.CLOSING or self._preview is not preview:
+                    return
+                preview.stamp = replace(preview.stamp, input_version=self.input_version)
+                self._current = preview.stamp
+                preview.mark_applied()
+                self._set_state(_State.REVIEW, "已自动回填词条并更新评分，可继续查看或校正。" if changed
+                                else "识别结果与当前输入一致，无需重新计算，可继续查看或校正。")
         self.preview_ready.emit()
-        self._set_state(_State.REVIEW, "识别完成；请在当前标签页查看并回填结果。")
 
     @Slot(bool)
     def _preview_finished(self, accepted: bool) -> None:
@@ -664,7 +684,8 @@ class OcrController(QObject):
             if not self._is_current(preview.stamp):
                 self._idle("识别结果已过期，请重新识别。")
             elif not accepted:
-                self._idle("已取消，原输入未改变。")
+                self._idle("已关闭识别结果，保留已回填词条；未确认的修改未应用。"
+                           if preview.automatically_applied else "已取消，原输入未改变。")
             else:
                 self._set_state(_State.APPLYING, "正在回填词条并更新评分…")
                 try:

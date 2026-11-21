@@ -467,7 +467,10 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_stats_divider_and_clear_button_style(self):
         layout = self.window.sub_stat_tabs.parentWidget().layout()
-        self.assertEqual(layout.itemAt(0).widget().text(), "选择一种方式录入副词条。")
+        toolbar = layout.itemAt(0).layout()
+        self.assertIs(toolbar, self.window.sub_input_toolbar)
+        self.assertEqual(toolbar.itemAt(0).widget().text(), "选择一种方式录入副词条。")
+        self.assertIs(toolbar.itemAt(1).widget(), self.window.ocr.appearance_controls)
         self.assertIs(layout.itemAt(1).widget(), self.window.sub_stat_tabs)
         manual_layout = self.window.sub_stat_tabs.widget(0).layout()
         self.assertIsNotNone(manual_layout.itemAt(0).layout())

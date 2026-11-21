@@ -72,6 +72,9 @@ QPushButton#clearSelection { background: #fff3e6; color: #a65316; border-color: 
 QPushButton#clearSelection:hover { background: #ffe6cc; border-color: #dfac77; }
 QPushButton#lockStat { padding: 8px 4px; }
 QPushButton:disabled { background: #f1f4f8; color: #8c99ab; border-color: #e4e9f0; }
+QPushButton#onTop:checked { background: #15803d; color: white; border-color: #15803d; }
+QPushButton#onTop:checked:hover { background: #166534; border-color: #166534; }
+QPushButton#onTop:checked:pressed { background: #14532d; border-color: #14532d; }
 QPushButton#primary { background: #2563eb; color: white; border-color: #2563eb; }
 QPushButton#primary:hover { background: #1d4ed8; }
 QPushButton:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
@@ -773,7 +776,10 @@ class EchoWindow(QMainWindow):
         hint = QLabel("选择一种方式录入副词条。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.sub_input_toolbar = QHBoxLayout()
+        self.sub_input_toolbar.addWidget(hint, 1)
+        self.sub_input_toolbar.addWidget(self.ocr.appearance_controls)
+        layout.addLayout(self.sub_input_toolbar)
         header = QGridLayout()
         self.cost = WheelSafeComboBox()
         for cost in (1, 3, 4):
