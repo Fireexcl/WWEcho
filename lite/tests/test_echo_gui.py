@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
     QMessageBox, QStyledItemDelegate, QTableWidgetItem, QTabWidget, QToolButton, QWidget,
 )
-from src.echo_gui import EchoWindow, ScoreProgressBar
+from lite.echo_gui import EchoWindow, ScoreProgressBar
 from src.echo_score import DEFAULT_STATS, EchoScorer, load_json
 from src.echo_weight_presets import DEFAULT_PRESET_NAME, WeightPresetStore
 
@@ -91,14 +91,14 @@ class EchoGuiTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.presets_path = Path(directory.name) / "weight-presets.json"
-        path_patch = patch("src.echo_gui.weight_presets_path", return_value=self.presets_path)
+        path_patch = patch("lite.echo_gui.weight_presets_path", return_value=self.presets_path)
         path_patch.start()
         self.addCleanup(path_patch.stop)
-        legacy_patch = patch("src.echo_gui.legacy_weight_presets_path",
+        legacy_patch = patch("lite.echo_gui.legacy_weight_presets_path",
                      return_value=Path(directory.name) / "legacy" / "weight-presets.json")
         legacy_patch.start()
         self.addCleanup(legacy_patch.stop)
-        dialog_patch = patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch = patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
         dialog_patch.start()
         self.addCleanup(dialog_patch.stop)
         ControlledPlanner.reset()
@@ -370,7 +370,7 @@ class EchoGuiTests(unittest.TestCase):
         button = section.toggle_button
         original = self.window.current_weights()
         for name in ("短方案", "长" * 80):
-            with patch("src.echo_gui.QInputDialog.getText", return_value=(name, True)):
+            with patch("lite.echo_gui.QInputDialog.getText", return_value=(name, True)):
                 self.window.rename_weights()
             self.app.processEvents()
             for area in ("title", "summary", "right_edge"):
@@ -398,7 +398,7 @@ class EchoGuiTests(unittest.TestCase):
         self.window.sections[0].toggle_button.click()
         self.add_weight_preset("新方案")
         self.assertEqual(summary.text(), "当前权重方案：新方案")
-        with patch("src.echo_gui.QInputDialog.getText", return_value=("<角色甲 & 乙>", True)):
+        with patch("lite.echo_gui.QInputDialog.getText", return_value=("<角色甲 & 乙>", True)):
             self.window.rename_weights()
         self.assertEqual(summary.text(), "当前权重方案：<角色甲 & 乙>")
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
@@ -479,7 +479,7 @@ class EchoGuiTests(unittest.TestCase):
         def custom_config(path):
             return costs if path == cost_path else load_json(path)
 
-        with patch("src.echo_gui.load_json", side_effect=custom_config):
+        with patch("lite.echo_gui.load_json", side_effect=custom_config):
             window = EchoWindow()
             try:
                 self.assertEqual({name: box.value() for name, box in window.strategy_inputs.items()},
@@ -497,7 +497,7 @@ class EchoGuiTests(unittest.TestCase):
                     raise error
                 return load_json(path)
 
-            with self.subTest(error=error), patch("src.echo_gui.load_json", side_effect=unavailable_config), \
+            with self.subTest(error=error), patch("lite.echo_gui.load_json", side_effect=unavailable_config), \
                     patch.object(sys.modules["src.echo_strategy"], "DEFAULT_COSTS", cost_path):
                 window = EchoWindow()
                 try:
@@ -529,8 +529,8 @@ class EchoGuiTests(unittest.TestCase):
         preset["sub_stats"]["crit_rate"] += 1
         incoming = {"schema_version": 1, "presets": [
             {"id": "imported-id", "name": "导入方案", "weights": preset}]}
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色权重.json", "")), \
-                patch("src.echo_gui.load_json", return_value=incoming):
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/角色权重.json", "")), \
+                patch("lite.echo_gui.load_json", return_value=incoming):
             self.window.import_weights()
         self.assertEqual(combo.currentText(), DEFAULT_PRESET_NAME)
         combo.setCurrentIndex(combo.findData("imported-id"))
@@ -538,12 +538,12 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.current_weights(), preset)
         self.window.clear_sub_stats()
         self.assertEqual(combo.currentText(), "导入方案")
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")):
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")):
             self.window.import_weights()
         self.assertEqual(self.window.current_weights(), preset)
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/bad.json", "")), \
-                patch("src.echo_gui.load_json", side_effect=ValueError("bad preset")), \
-                patch("src.echo_gui.QMessageBox.warning"):
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/bad.json", "")), \
+                patch("lite.echo_gui.load_json", side_effect=ValueError("bad preset")), \
+                patch("lite.echo_gui.QMessageBox.warning"):
             self.window.import_weights()
         self.assertEqual(self.window.current_weights(), preset)
         box = self.window.weight_inputs["sub_stats"]["crit_rate"]
@@ -838,7 +838,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.score_label.text(), f"{expected:g} 分")
 
     def add_weight_preset(self, name="队伍甲"):
-        with patch("src.echo_gui.QInputDialog.getText", return_value=(name, True)):
+        with patch("lite.echo_gui.QInputDialog.getText", return_value=(name, True)):
             self.assertTrue(self.window.save_weights_as())
         return self.window.preset_store.selected_id
 
@@ -850,7 +850,7 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲")
         self.assertEqual(self.window.preset_store.presets[0]["weights"], original)
         self.assertFalse(self.window._weights_dirty)
-        with patch("src.echo_gui.QInputDialog.getText", return_value=("角色乙", True)):
+        with patch("lite.echo_gui.QInputDialog.getText", return_value=("角色乙", True)):
             self.window.rename_weights_action.trigger()
         self.assertEqual(self.window.weight_preset_combo.currentText(), "角色乙")
         self.assertEqual(self.window.preset_store.selected_id, preset_id)
@@ -930,7 +930,7 @@ class EchoGuiTests(unittest.TestCase):
             self.assertNotIn("自定义权重", dialog.text())
             return QMessageBox.StandardButton.Cancel
 
-        with patch("src.echo_gui.QMessageBox.exec", cancel_with_original_name):
+        with patch("lite.echo_gui.QMessageBox.exec", cancel_with_original_name):
             self.assertFalse(self.window.close())
         self.assertEqual(self.window.weight_preset_combo.currentData(), selected_id)
         self.assertTrue(self.window.save_weights())
@@ -1067,7 +1067,7 @@ class EchoGuiTests(unittest.TestCase):
                 combo.setCurrentIndex(combo.findData(new_id))
                 saved = self.window.preset_store.current["weights"]["sub_stats"]["crit_rate"]
                 box.setValue(saved + 1)
-                with patch("src.echo_gui.QMessageBox.exec", return_value=choice) as dialog:
+                with patch("lite.echo_gui.QMessageBox.exec", return_value=choice) as dialog:
                     combo.setCurrentIndex(combo.findData(default_id))
                 dialog.assert_called_once()
                 if choice == QMessageBox.StandardButton.Cancel:
@@ -1089,8 +1089,8 @@ class EchoGuiTests(unittest.TestCase):
         new_id = self.add_weight_preset()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         before = self.window.current_weights()
-        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save), \
-                patch("src.echo_gui.QMessageBox.warning") as warning, \
+        with patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save), \
+                patch("lite.echo_gui.QMessageBox.warning") as warning, \
                 patch.object(self.window.preset_store, "_commit", side_effect=OSError("disk full")):
             self.window.weight_preset_combo.setCurrentIndex(
                 self.window.weight_preset_combo.findData(default_id))
@@ -1106,7 +1106,7 @@ class EchoGuiTests(unittest.TestCase):
         new_id = self.add_weight_preset()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         with patch.object(self.window.preset_store, "_commit", side_effect=OSError("disk full")), \
-                patch("src.echo_gui.QMessageBox.warning") as warning:
+                patch("lite.echo_gui.QMessageBox.warning") as warning:
             self.window.weight_preset_combo.setCurrentIndex(
                 self.window.weight_preset_combo.findData(default_id))
         warning.assert_called_once()
@@ -1124,11 +1124,11 @@ class EchoGuiTests(unittest.TestCase):
             self.assertEqual(dialog.defaultButton(), dialog.button(QMessageBox.StandardButton.Save))
             return QMessageBox.StandardButton.Cancel
 
-        with patch("src.echo_gui.QMessageBox.exec", cancel_with_labels):
+        with patch("lite.echo_gui.QMessageBox.exec", cancel_with_labels):
             self.assertFalse(self.window.close())
         self.assertFalse(self.window._closing)
         self.assertTrue(self.window._weights_dirty)
-        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save):
+        with patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Save):
             self.assertTrue(self.window.close())
         store = WeightPresetStore(self.presets_path, self.window.stats, self.window.defaults)
         self.assertEqual(store.current["weights"]["sub_stats"]["crit_rate"], 7)
@@ -1154,7 +1154,7 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_preset_rename_preserves_unsaved_edits(self):
         saved = self.window.current_weights()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("src.echo_gui.QInputDialog.getText", return_value=("新名字", True)):
+        with patch("lite.echo_gui.QInputDialog.getText", return_value=("新名字", True)):
             self.window.rename_weights()
         self.assertEqual(self.window.weight_preset_combo.currentText(), "新名字（有修改）")
         self.assertEqual(self.window.preset_store.current["name"], "新名字")
@@ -1167,8 +1167,8 @@ class EchoGuiTests(unittest.TestCase):
         before = self.presets_path.read_bytes()
         for name, accepted in (("取消", False), (" ", True), (DEFAULT_PRESET_NAME, True)):
             with self.subTest(name=name), \
-                    patch("src.echo_gui.QInputDialog.getText", return_value=(name, accepted)), \
-                    patch("src.echo_gui.QMessageBox.warning"):
+                    patch("lite.echo_gui.QInputDialog.getText", return_value=(name, accepted)), \
+                    patch("lite.echo_gui.QMessageBox.warning"):
                 self.assertFalse(self.window.save_weights_as())
                 self.window.rename_weights()
             self.assertEqual(self.presets_path.read_bytes(), before)
@@ -1176,15 +1176,15 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_weight_preset_delete_confirmation_and_protect_last(self):
         self.assertFalse(self.window.delete_weights_action.isEnabled())
-        with patch("src.echo_gui.QMessageBox.warning") as warning:
+        with patch("lite.echo_gui.QMessageBox.warning") as warning:
             self.window.delete_weights()
         warning.assert_called_once()
         self.add_weight_preset()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
+        with patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.No):
             self.window.delete_weights()
         self.assertEqual(self.window.weight_preset_combo.currentText(), "队伍甲（有修改）")
-        with patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
+        with patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Yes):
             self.window.delete_weights_action.trigger()
         self.assertEqual(self.window.weight_preset_combo.count(), 1)
         self.assertEqual(self.window.weight_preset_combo.currentText(), DEFAULT_PRESET_NAME)
@@ -1265,7 +1265,7 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         draft = self.window.current_weights()
         destination = self.presets_path.with_name("export.json")
-        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
+        with patch("lite.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
             self.window.export_weights()
         exported = load_json(destination)
         expected = copy.deepcopy(saved)
@@ -1289,10 +1289,10 @@ class EchoGuiTests(unittest.TestCase):
                 before_document = self.window.preset_store.export_document()
                 before_disk = self.presets_path.read_bytes()
                 before_text = self.window.weight_preset_combo.currentText()
-                with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/单套.json", "")), \
-                        patch("src.echo_gui.load_json", return_value=single), \
-                        patch("src.echo_gui.QMessageBox.warning") as warning, \
-                        patch("src.echo_gui.QMessageBox.exec") as confirm, \
+                with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/单套.json", "")), \
+                        patch("lite.echo_gui.load_json", return_value=single), \
+                        patch("lite.echo_gui.QMessageBox.warning") as warning, \
+                        patch("lite.echo_gui.QMessageBox.exec") as confirm, \
                         patch.object(self.window, "apply_weights") as apply:
                     self.window.import_weights()
                 warning.assert_called_once()
@@ -1316,9 +1316,9 @@ class EchoGuiTests(unittest.TestCase):
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
         draft = self.window.current_weights()
         version = self.window._strategy_version
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
-                patch("src.echo_gui.load_json", return_value=imported), \
-                patch("src.echo_gui.QMessageBox.exec") as confirm:
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("lite.echo_gui.load_json", return_value=imported), \
+                patch("lite.echo_gui.QMessageBox.exec") as confirm:
             self.window.import_weights()
         confirm.assert_not_called()
         self.assertEqual(self.window.preset_store.presets, original_presets + [new_preset])
@@ -1334,8 +1334,8 @@ class EchoGuiTests(unittest.TestCase):
         self.assertEqual(stored.presets, original_presets + [new_preset])
         self.assertEqual(stored.selected_id, selected_id)
         # 新方案可正常切换并参与评分，重复导入不会再增加。
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
-                patch("src.echo_gui.load_json", return_value=imported):
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("lite.echo_gui.load_json", return_value=imported):
             self.window.import_weights()
         self.assertEqual(self.window.weight_preset_combo.count(), 2)
         self.assertIn("新增 0 个，跳过重复 ID 2 个", self.window.statusBar().currentMessage())
@@ -1348,8 +1348,8 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_preset_import_library_same_name_different_id_gets_suffix(self):
         imported = {"schema_version": 1, "presets": [
             {"id": "new-id", "name": DEFAULT_PRESET_NAME, "weights": self.window.current_weights()}]}
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
-                patch("src.echo_gui.load_json", return_value=imported):
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("lite.echo_gui.load_json", return_value=imported):
             self.window.import_weights()
         combo = self.window.weight_preset_combo
         self.assertEqual(combo.itemText(combo.findData("new-id")), DEFAULT_PRESET_NAME + "（导入 1）")
@@ -1364,18 +1364,18 @@ class EchoGuiTests(unittest.TestCase):
         invalid = {"id": "invalid", "name": "无效", "weights": {}}
         for presets in ([valid, invalid], {"not": "a-list"}):
             with self.subTest(presets=presets), \
-                    patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
-                    patch("src.echo_gui.load_json", return_value={"schema_version": 1, "presets": presets}), \
-                    patch("src.echo_gui.QMessageBox.warning") as warning:
+                    patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                    patch("lite.echo_gui.load_json", return_value={"schema_version": 1, "presets": presets}), \
+                    patch("lite.echo_gui.QMessageBox.warning") as warning:
                 self.window.import_weights()
             warning.assert_called_once()
             self.assertEqual(self.window.current_weights(), draft)
             self.assertEqual(self.window.preset_store.export_document(), saved)
             self.assertEqual(self.presets_path.read_bytes(), before)
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
-                patch("src.echo_gui.load_json", return_value={"schema_version": 1, "presets": [valid]}), \
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("/tmp/方案库.json", "")), \
+                patch("lite.echo_gui.load_json", return_value={"schema_version": 1, "presets": [valid]}), \
                 patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")), \
-                patch("src.echo_gui.QMessageBox.warning") as warning:
+                patch("lite.echo_gui.QMessageBox.warning") as warning:
             self.window.import_weights()
         warning.assert_called_once()
         self.assertEqual(self.window.current_weights(), draft)
@@ -1386,7 +1386,7 @@ class EchoGuiTests(unittest.TestCase):
     def test_weight_preset_export_to_local_library_updates_saved_state_and_revision(self):
         self.add_weight_preset("第二套")
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")):
+        with patch("lite.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")):
             self.window.export_weights()
         self.assertFalse(self.window._weights_dirty)
         self.assertTrue(self.window.custom_weights_notice.isHidden())
@@ -1399,8 +1399,8 @@ class EchoGuiTests(unittest.TestCase):
         other.add("其他窗口新增", other.current["weights"])
         before = self.presets_path.read_bytes()
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")), \
-                patch("src.echo_gui.QMessageBox.warning") as warning:
+        with patch("lite.echo_gui.QFileDialog.getSaveFileName", return_value=(str(self.presets_path), "")), \
+                patch("lite.echo_gui.QMessageBox.warning") as warning:
             self.window.export_weights()
         warning.assert_called_once()
         self.assertEqual(self.presets_path.read_bytes(), before)
@@ -1412,9 +1412,9 @@ class EchoGuiTests(unittest.TestCase):
         original = self.window.preset_store.export_document()
         destination.write_text(json.dumps(original), encoding="utf-8")
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")), \
+        with patch("lite.echo_gui.QFileDialog.getSaveFileName", return_value=(str(destination), "")), \
                 patch("src.echo_weight_presets.os.replace", side_effect=OSError("disk full")), \
-                patch("src.echo_gui.QMessageBox.warning") as warning:
+                patch("lite.echo_gui.QMessageBox.warning") as warning:
             self.window.export_weights()
         warning.assert_called_once()
         self.assertEqual(load_json(destination), original)
@@ -1445,7 +1445,7 @@ class EchoGuiTests(unittest.TestCase):
         source.add("已有方案", weights)
         original = legacy.read_bytes()
         destination = self.presets_path.with_name("portable-presets.json")
-        with patch("src.echo_gui.weight_presets_path", return_value=destination):
+        with patch("lite.echo_gui.weight_presets_path", return_value=destination):
             window = EchoWindow()
         try:
             self.assertEqual(window.preset_store.path, destination)
@@ -1465,7 +1465,7 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_weight_preset_explicit_location_does_not_read_legacy_user_library(self):
         destination = self.presets_path.with_name("explicit.json")
-        with patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+        with patch("lite.echo_gui.legacy_weight_presets_path") as legacy:
             window = EchoWindow(presets_path=destination)
         try:
             legacy.assert_not_called()
@@ -1492,9 +1492,10 @@ class EchoGuiTests(unittest.TestCase):
             with self.subTest(platform=platform), \
                     patch.object(sys, "platform", platform), \
                     patch.object(sys, "frozen", True, create=True), \
-                    patch("src.echo_gui.DEFAULT_WEIGHTS", default_weights), \
-                    patch("src.echo_gui.weight_presets_path", return_value=destination), \
-                    patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+                    patch.object(sys, "_MEIPASS", str(resources), create=True), \
+                    patch("lite.echo_gui.DEFAULT_WEIGHTS", default_weights), \
+                    patch("lite.echo_gui.weight_presets_path", return_value=destination), \
+                    patch("lite.echo_gui.legacy_weight_presets_path") as legacy:
                 window = EchoWindow()
                 try:
                     legacy.assert_not_called()
@@ -1511,7 +1512,7 @@ class EchoGuiTests(unittest.TestCase):
                     window.close()
                     window.deleteLater()
                     self.app.processEvents()
-                with patch("src.echo_gui.initial_weight_presets_path") as initial:
+                with patch("lite.echo_gui.initial_weight_presets_path") as initial:
                     reopened = EchoWindow()
                 try:
                     initial.assert_not_called()
@@ -1523,7 +1524,7 @@ class EchoGuiTests(unittest.TestCase):
                     self.app.processEvents()
 
     def test_weight_preset_existing_local_library_does_not_query_user_directory(self):
-        with patch("src.echo_gui.legacy_weight_presets_path") as legacy:
+        with patch("lite.echo_gui.legacy_weight_presets_path") as legacy:
             window = EchoWindow()
         try:
             legacy.assert_not_called()
@@ -1535,10 +1536,10 @@ class EchoGuiTests(unittest.TestCase):
             self.app.processEvents()
 
     def test_weight_preset_import_export_dialogs_default_to_local_directory(self):
-        with patch("src.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")) as open_dialog:
+        with patch("lite.echo_gui.QFileDialog.getOpenFileName", return_value=("", "")) as open_dialog:
             self.window.import_weights()
         self.assertEqual(open_dialog.call_args.args[2], str(self.presets_path.parent))
-        with patch("src.echo_gui.QFileDialog.getSaveFileName", return_value=("", "")) as save_dialog:
+        with patch("lite.echo_gui.QFileDialog.getSaveFileName", return_value=("", "")) as save_dialog:
             self.window.export_weights()
         self.assertEqual(save_dialog.call_args.args[2], str(self.presets_path.with_name("weight-presets-export.json")))
 
@@ -1986,15 +1987,15 @@ class EchoGuiRealStrategyTests(unittest.TestCase):
     def setUp(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        path_patch = patch("src.echo_gui.weight_presets_path",
+        path_patch = patch("lite.echo_gui.weight_presets_path",
                            return_value=Path(directory.name) / "weight-presets.json")
         path_patch.start()
         self.addCleanup(path_patch.stop)
-        legacy_patch = patch("src.echo_gui.legacy_weight_presets_path",
+        legacy_patch = patch("lite.echo_gui.legacy_weight_presets_path",
                      return_value=Path(directory.name) / "legacy" / "weight-presets.json")
         legacy_patch.start()
         self.addCleanup(legacy_patch.stop)
-        dialog_patch = patch("src.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch = patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
         dialog_patch.start()
         self.addCleanup(dialog_patch.stop)
 

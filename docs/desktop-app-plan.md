@@ -43,7 +43,7 @@
 
 ### macOS 发布实现
 
-- 使用同一份 [WWEcho.spec](../WWEcho.spec)，在 macOS 通过 [build-macos.sh](../build-macos.sh) 构建独立 `.app`，不改变 Windows 单文件 EXE 的构建方式；目标架构随构建环境。
+- Lite 两平台使用 [lite/WWEcho.spec](../lite/WWEcho.spec)，在 macOS 通过 [lite/build-macos.sh](../lite/build-macos.sh) 构建独立 `.app`；Windows 仍构建单文件 EXE。Full 的单独构建入口见 [Lite / Full 方案](./Lite-Full-Build-Plan.md)。
 - 权重采用便携式存储，保存到 `.app` 同级的 `weight-presets.json`，不写入应用包或用户应用数据目录。程序所在目录需可写；移动时同时携带 JSON，升级仅替换 `.app`。
 - 与 Windows 一样，构建时把当前项目方案库作为只读模板打包；外部库不存在时复制全部方案和最近选择，已有库绝不覆盖。打包版不自动读取旧版用户目录；源码迁移规则不变。
 - 当前仅提供本地 ad-hoc 签名，未做 Developer ID 签名/公证。对外发布需另行处理 Gatekeeper 与 App Translocation；详细使用限制见 [README](../README.md#macos-应用打包与使用)。

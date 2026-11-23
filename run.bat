@@ -33,7 +33,7 @@ echo Installing project dependencies...
 if errorlevel 1 goto install_failed
 
 :launch
-"%PYTHON%" -m src.echo_gui %*
+"%PYTHON%" -m lite.echo_gui %*
 if errorlevel 1 goto launch_failed
 exit /b 0
 

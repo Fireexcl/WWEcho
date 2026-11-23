@@ -2,6 +2,9 @@
 
 WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算的桌面应用。通过图形界面选择声骸词条、调整评分权重，并查看培养建议和频整器洗炼收益。
 
+- **Lite**：手动录入、评分、开孔推荐和频整器计算，不包含截图识别及 OCR 运行库。
+- **Full**：保留手动功能，增加本地截图识别。两个版本均可调整窗口透明度（50%～100%）和置顶。
+
 > 本应用的评分权重可自行调整。培养成本中的经验、打孔器消耗与回收比例按项目配置和用户提供的数据建模，不代表官方推荐、精确体力成本或游戏内保证结果。
 
 ## 功能介绍
@@ -24,6 +27,19 @@ WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算�
 - 五条副词条开满后，可锁定 1～4 条并分析其余词条重构后的升分概率与收益。
 - 比较给定预算下的指定锁法和动态换锁方案（动态方案可根据每次重构后的实际状态重新选择后续锁法）。给定预算支持 0～6 枚。
 
+### 截图识别副词条（仅 Full，试验版）
+
+1. 在区域 2 的「截图识别」标签页点「设置识别区域」。工具会最小化，拖动框选可见游戏中的主词条、固定小词条和**完整副词条列表**，包含未解锁槽位。声骸名称、弃置／锁定标记、等级和经验栏可包含，也可从主词条行开始截图；这些页头不作为词条导入。松开保存，按 Esc 取消。
+2. 回到简体中文开孔画面，点「截图识别」。识别结果会显示在当前标签页中，主词条和固定小词条前的图标误识别文字会被排除；“强化至……”行显示为“未开孔”，不要求选择词条或档位，也不参与回填和评分。仅按识别到的**已开副词条**数量回填 1～5 条；五条开满后可直接计算评分，零条已开仍不能回填。
+3. Cost、主词条和固定小词条也从截图识别并一起回填。字段完整、类型与数值合法且唯一时自动回填，包括能够唯一确定的模糊名称匹配；结果保留在预览中，「确认并回填」暂时禁用。预览仍可编辑，产生未回填的修改后才重新启用确认，恢复成已回填结果则再次禁用。字段缺失、未匹配文字、歧义或非法档位仍需校正后手动确认。Cost 3/4 词条组合重叠时，以 0/5/10/15/20/25 级的线性数值对应关系判别；无法唯一判定时不会猜测。
+4. 截图与词条校正列表之间不再显示说明提示；校验及错误信息仍保留。预览底部「取消」左侧提供与「取消」样式一致的「重新设置识别区域」「截图识别」按钮，可直接重新框选或再次识别，复用已加载的本地引擎。自动回填后取消预览不会撤销已回填结果，未确认的预览修改不会应用。
+
+只截取可见的窗口或无边框游戏画面。游戏位置、屏幕或缩放变化后请重新框选；不支持被遮挡、最小化或独占全屏的画面。「选择一种方式录入副词条」右侧提供短透明度滑块（50%～100%）和置顶按钮，切换录入标签页时仍可使用；置顶开启时按钮为绿色，两项设置自动保存，不再提供「恢复窗口默认」。即使透明，工具与选区重叠时也会先最小化。
+
+截图与识别文字只驻留本机内存，不上传、不自动保存。识别设置独立保存在应用旁的 `ocr-settings.json`。macOS 若提示未授权，请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」授权当前应用（或启动源码版的应用），必要时重启。
+
+试验目标是 Windows 11 x64 与 macOS Apple Silicon；已使用实机截图验证完整页头、仅等级栏、从主词条开始的三种裁剪，更多画面及跨平台准确率仍待验收。不提供实时识别、快捷键或 Linux OCR 支持承诺。自动回填仅发生在用户点击识别后，不会后台监测或反复覆盖手动输入。识别不成功时仍可手动录入。
+
 ### 权重方案管理
 
 - 可以按副词条、Cost 1/3/4 主词条和固定小词条，分别设置权重。
@@ -37,16 +53,16 @@ WWEcho 是一个用于《鸣潮》声骸评分、开孔推荐、频整器计算�
 
 ### 使用独立应用
 
-Release提供了 Windows `.exe` 或 macOS `.app`，可直接运行，无需在目标电脑安装 Python：
+从 Release 选择标有 Lite 或 Full 的对应平台压缩包。两版均可直接运行，无需在目标电脑安装 Python：
 
-- Windows：双击 `WWEcho声骸工作台.exe` 启动。
+- Windows：双击 `WWEcho声骸工作台.exe` 启动。若下载的是 EXE＋依赖目录版，请完整解压后运行，不要把 EXE 单独移动。
 - macOS：在 Finder 中将 `WWEcho声骸工作台.app` 放到可写入的普通文件夹后打开。当前构建未进行 Apple Developer ID 签名和公证，macOS 可能显示安全提示。
 
-首次启动会在应用所在目录创建权重方案库`weight-presets.json`；备份该文件即可保留自己的方案。
+两版应用文件同名，请解压到不同目录。首次启动会在应用旁创建 `weight-presets.json`，备份该文件即可保留权重方案。Lite 的窗口设置保存为 `window-settings.json`，Full 的窗口与识别设置保存为 `ocr-settings.json`。
 
 ### 从源码运行
 
-需要 Python 3.9 或更高版本。
+从项目根目录启动。`run.sh` 和 `run.bat` 均启动 Lite，需要 Python 3.9 或更高版本。
 
 Windows 可在项目目录双击 `run.bat`：脚本会创建项目虚拟环境并安装运行依赖（首次运行需要网络）。
 
@@ -60,18 +76,30 @@ python3 -m venv .venv
 
 `run.sh` 使用项目 `.venv` 中的 Python；若尚未安装依赖，请先执行上面的安装命令。
 
+运行 Full 时，使用原生架构的 **Python 3.9～3.12**。以 macOS 为例：
+
+```bash
+python3 -m venv full/.venv
+./full/.venv/bin/python -m pip install -r full/requirements-ocr.txt
+./full/.venv/bin/python -m full.echo_gui
+```
+
+Windows 使用 `py -3.12 -m venv full\.venv` 创建环境，并用 `full\.venv\Scripts\python.exe` 执行以上安装、启动命令。
+
 ### 自行构建应用
 
-构建需要 Python 3.9 或更高版本及网络连接：
+从同一份源码即可构建两版。在项目根目录调用相应目录的脚本，无需切换分支。Windows 与 macOS 必须分别在对应系统上构建。
 
-- Windows：在 Windows 上双击 `build-windows.bat`，生成 `dist/WWEcho声骸工作台.exe`。
-- macOS：在 macOS 项目目录执行 `./build-macos.sh`，生成 `dist/WWEcho声骸工作台.app`。应用架构与构建机的 Python 架构一致，例如 Apple Silicon 上构建得到 arm64 应用。
+| 平台 | Lite | Full |
+|---|---|---|
+| macOS | `./lite/build-macos.sh` → `lite/dist/WWEcho声骸工作台.app` | `./full/build-macos.sh` → `full/dist/WWEcho声骸工作台.app` |
+| Windows | `lite\build-windows.bat` → `lite/dist/WWEcho声骸工作台.exe` | `full\build-windows.bat all` → `full/dist/windows-onefile/` 单文件版和 `full/dist/windows-onedir/` 目录版 |
 
-构建脚本会安装 `requirements-build.txt` 中的 PyInstaller 依赖。Windows 与 macOS 应分别在对应系统上构建。
+Full 的 Windows 脚本默认构建两种格式，也可传 `onefile` 或 `onedir` 单独构建。分发目录版时保留含 `_internal/` 的完整目录。
 
-构建时使用项目根目录的 `icon.png` 作为应用图标。
+构建脚本分别使用 `lite/.venv` 和 `full/.venv`，不共用依赖或输出目录。Lite 构建要求 Python 3.9 或更高版本；Full 试验构建要求 Python 3.9～3.12、Windows 11 x64 或 macOS Apple Silicon 原生 arm64。两版读取根目录的 `icon.png`、配置和 `weight-presets.json` 模板，首次安装构建依赖需要网络。请用未包含个人修改的权重模板构建发布包。
 
-macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初始方案库模板；缺失时可先运行源码版 GUI 创建，或从已有方案库复制到该位置。
+只有 Full 打包 OCR 运行库、ONNX 模型和对应许可；运行时不下载模型。macOS 构建未做 Developer ID 签名或公证。
 
 ## 使用说明
 
@@ -90,6 +118,8 @@ macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初
 - [总体定义与术语](docs/General-Definition.md)
 - [调频／开孔算法说明](docs/Algorithm-Tuning.md)
 - [洗炼／洗词条算法说明](docs/Algorithm-Reroll.md)
+- [截图识别实施范围与验收要求](docs/OCR-Implementation-Plan.md)
+- [Lite / Full 拆分及发布验收](docs/Lite-Full-Build-Plan.md)
 
 ## 运行测试
 
@@ -97,4 +127,8 @@ macOS 构建前，项目根目录需有有效的 `weight-presets.json` 作为初
 
 ```bash
 python -m unittest discover -s tests
+python -m unittest discover -s lite/tests
+python -m unittest discover -s full/tests
 ```
+
+以上依次运行共用、Lite 和 Full 测试。Full 安装可选 OCR 依赖后会用 [实机截图](full/tests/sample.png) 验证三种页头裁剪；未安装引擎时仅跳过该实机样本回归。

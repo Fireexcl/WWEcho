@@ -11,4 +11,4 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
-exec "$PYTHON" -m src.echo_gui "$@"
+exec "$PYTHON" -m lite.echo_gui "$@"

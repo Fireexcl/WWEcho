@@ -1,27 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from importlib.metadata import distribution
 from pathlib import Path
+import os
 import sys
-
 from PIL import Image
 
+from PyInstaller.utils.hooks import get_package_paths
 
-ROOT = Path(SPECPATH)
+
+EDITION_DIR = Path(SPECPATH).resolve()
+ROOT = EDITION_DIR.parent
 IS_MACOS = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
+MODE = os.environ.get("WWECHO_BUILD_MODE", "macos" if IS_MACOS else "onefile")
+if MODE not in (("macos",) if IS_MACOS else ("onefile", "onedir") if IS_WINDOWS else ()):
+    raise SystemExit(f"Unsupported build mode/platform: {MODE}/{sys.platform}")
+IS_ONEFILE = MODE == "onefile"
 APP_NAME = "WWEcho声骸工作台"
+sys.path.insert(0, str(ROOT))
+from full.echo_ocr import MODEL_FILES
+
 SOURCE_ICON = ROOT / "icon.png"
 if not SOURCE_ICON.is_file():
     raise SystemExit(f"Required application icon missing: {SOURCE_ICON}")
 
-BUILD_ICON_DIR = ROOT / "build" / "generated-icons"
+BUILD_ICON_DIR = EDITION_DIR / "build" / "generated-icons"
 BUILD_ICON_DIR.mkdir(parents=True, exist_ok=True)
+
 with Image.open(SOURCE_ICON) as source:
     icon = source.convert("RGBA")
     icon.thumbnail((512, 512), Image.Resampling.LANCZOS)
     square = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     square.alpha_composite(icon, ((512 - icon.width) // 2, (512 - icon.height) // 2))
 
-if sys.platform == "win32":
+if IS_WINDOWS:
     APP_ICON = str(BUILD_ICON_DIR / "WWEcho.ico")
     square.save(
         APP_ICON,
@@ -41,10 +54,33 @@ datas = [
     (str(ROOT / "config" / "echo-stats.json"), "config"),
     (str(ROOT / "config" / "score-weights.json"), "config"),
     (str(ROOT / "weight-presets.json"), "."),
+    (str(EDITION_DIR / "licenses" / "RapidOCR-LICENSE.txt"), "licenses"),
+    (str(EDITION_DIR / "licenses" / "OCR-NOTICE.txt"), "licenses"),
 ]
+_, ocr_dir = get_package_paths("rapidocr_onnxruntime")
+for relative in ("config.yaml", *(f"models/{name}" for name in MODEL_FILES.values())):
+    asset = Path(ocr_dir) / relative
+    if not asset.is_file():
+        raise SystemExit(f"Required OCR resource missing: {asset}")
+    datas.append((str(asset), str(Path("rapidocr_onnxruntime") / Path(relative).parent)))
+
+# ONNX Runtime and tqdm ship notices inside the package rather than dist-info.
+ocr_distributions = (
+    "onnxruntime", "opencv-python", "numpy", "PyYAML", "pyclipper", "Shapely",
+    "Pillow", "six", "tqdm", "coloredlogs", "humanfriendly", "flatbuffers",
+    "packaging", "protobuf", "sympy", "mpmath",
+) + (("colorama",) if IS_WINDOWS else ())
+for package in ocr_distributions:
+    wheel = distribution(package)
+    for path in wheel.files or ():
+        if not path.name.lower().startswith(("licen", "copying", "notice", "thirdpartynotice")):
+            continue
+        if path.parts[0].endswith(".dist-info") or len(path.parts) == 1 or (
+                len(path.parts) == 2 and path.parts[0] in ("onnxruntime", "tqdm")):
+            datas.append((str(wheel.locate_file(path)), f"licenses/{package}"))
 
 a = Analysis(
-    [str(ROOT / "src" / "echo_gui.py")],
+    [str(EDITION_DIR / "echo_gui.py")],
     pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
@@ -61,25 +97,25 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries if not IS_MACOS else [],
-    a.datas if not IS_MACOS else [],
+    a.binaries if IS_ONEFILE else [],
+    a.datas if IS_ONEFILE else [],
     [],
-    exclude_binaries=IS_MACOS,
+    exclude_binaries=not IS_ONEFILE,
     name=APP_NAME,
     icon=APP_ICON,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch="arm64" if IS_MACOS else None,
     codesign_identity=None,
     entitlements_file=None,
 )
 
-if IS_MACOS:
+if not IS_ONEFILE:
     collection = COLLECT(
         exe,
         a.binaries,
@@ -88,6 +124,7 @@ if IS_MACOS:
         upx=False,
         name=APP_NAME,
     )
+if IS_MACOS:
     app = BUNDLE(
         collection,
         name=APP_NAME + ".app",

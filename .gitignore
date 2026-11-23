@@ -3,6 +3,11 @@
 __pycache__/
 /build/
 /dist/
+/lite/build/
+/lite/dist/
+/full/build/
+/full/dist/
 /weight-presets.json.lock
 /.weight-presets.json.*.tmp
 /window-settings.json
+/ocr-settings.json

@@ -1,0 +1,15 @@
+WWEcho OCR trial build: bundled third-party components
+
+RapidOCR (rapidocr-onnxruntime 1.4.4) and the original ONNX resources from
+its published wheel are redistributed without modification.
+Source: https://github.com/RapidAI/RapidOCR/tree/v1.4.4
+Wheel: https://pypi.org/project/rapidocr-onnxruntime/1.4.4/
+License: Apache 2.0, see RapidOCR-LICENSE.txt.
+
+PP-OCR detection, recognition, and orientation models originate from
+PaddleOCR (Copyright PaddlePaddle Authors; Apache 2.0):
+https://github.com/PaddlePaddle/PaddleOCR/tree/release/2.7
+The recognition model contains its character dictionary as ONNX metadata.
+
+The package also contains the OCR runtime wheels' available license and
+third-party notice files grouped by distribution under licenses/.
