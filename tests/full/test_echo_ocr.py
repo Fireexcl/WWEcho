@@ -7,7 +7,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import patch
 
-from full.echo_ocr import (
+from src.full.echo_ocr import (
     Completeness, LocalOcrEngine, OcrError, OcrToken, SubStatEntry, parse_sub_stats,
     validate_selection,
 )
@@ -404,7 +404,7 @@ class EchoOcrSampleTests(unittest.TestCase):
         import numpy as np
 
         image = cv2.imread(str(Path(__file__).with_name("sample.png")))
-        self.assertIsNotNone(image, "缺少或无法读取 full/tests/sample.png 实机截图")
+        self.assertIsNotNone(image, "缺少或无法读取 tests/full/sample.png 实机截图")
         stats = load_json(DEFAULT_STATS)
         engine = LocalOcrEngine()
         for top in (0, 40, 80):

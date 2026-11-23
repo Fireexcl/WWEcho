@@ -6,12 +6,13 @@ import json
 import math
 import sys
 from concurrent.futures import CancelledError
+from contextlib import ExitStack
 from copy import deepcopy
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Sequence
 
-from PySide6.QtCore import QEvent, QIODevice, QObject, QPoint, QRunnable, QSaveFile, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QSignalBlocker, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QIcon, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
@@ -20,6 +21,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from src.full.echo_ocr import OcrSelection, SubStatEntry, validate_selection
+from src.full.echo_ocr_gui import OcrController, WheelSafeComboBox
 from src.echo_costs import DEFAULT_COSTS, activation_defaults
 from src.echo_score import DEFAULT_STATS, DEFAULT_WEIGHTS, EchoScorer, load_json
 from src.echo_weight_presets import WEIGHTS_DESCRIPTION, WeightPresetStore, normalize_weights
@@ -121,7 +124,7 @@ def weight_presets_path() -> Path:
                 and directory.parent.parent.suffix == ".app"):
             directory = directory.parent.parent.parent
     else:
-        directory = Path(__file__).resolve().parent.parent
+        directory = Path(__file__).resolve().parents[2]
     return directory / "weight-presets.json"
 
 
@@ -385,7 +388,7 @@ class EchoWindow(QMainWindow):
         icon_path = (
             Path(sys._MEIPASS) / "icon.png"
             if getattr(sys, "frozen", False)
-            else Path(__file__).resolve().parent.parent / "icon.png"
+            else Path(__file__).resolve().parents[2] / "icon.png"
         )
         if icon_path.is_file():
             app_icon = QIcon(str(icon_path))
@@ -404,8 +407,6 @@ class EchoWindow(QMainWindow):
             self.cost_defaults = activation_defaults({})
         self.defaults = normalize_weights(self.stats, self.defaults)
         local_presets = presets_path if presets_path is not None else weight_presets_path()
-        self._appearance_settings_path = local_presets.parent / "window-settings.json"
-        self._appearance_read_error = ""
         self.preset_store = WeightPresetStore(
             local_presets, self.stats, self.defaults,
             legacy_path=initial_weight_presets_path()
@@ -456,6 +457,27 @@ class EchoWindow(QMainWindow):
         self.resize(980, 940)
         self.setMinimumSize(760, 680)
         self.setStyleSheet(STYLE)
+        self.appearance_controls = QWidget(self)
+        appearance = QHBoxLayout(self.appearance_controls)
+        appearance.setContentsMargins(0, 0, 0, 0)
+        appearance.setSpacing(8)
+        self.opacity_text = QLabel()
+        self.opacity_text.setObjectName("muted")
+        self.opacity = QSlider(Qt.Orientation.Horizontal)
+        self.opacity.setRange(50, 100)
+        self.opacity.setFixedWidth(96)
+        self.opacity.setAccessibleName("窗口透明度")
+        self.on_top = QPushButton("置顶")
+        self.on_top.setObjectName("onTop")
+        self.on_top.setCheckable(True)
+        appearance.addWidget(self.opacity_text)
+        appearance.addWidget(self.opacity)
+        appearance.addWidget(self.on_top)
+        self.ocr = OcrController(
+            self, self.stats, self.apply_ocr_selection,
+            self.appearance_controls, self.opacity_text, self.opacity, self.on_top,
+        )
+        self.ocr.close_ready.connect(self.close)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         canvas = QWidget()
@@ -783,124 +805,28 @@ class EchoWindow(QMainWindow):
             for box in inputs.values():
                 box.interpretText()
 
-    def _load_appearance_settings(self) -> tuple[int, bool]:
-        try:
-            with self._appearance_settings_path.open(encoding="utf-8") as file:
-                data = json.load(file)
-            if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-                raise ValueError("不支持的窗口设置版本")
-            opacity, on_top = data["opacity"], data["on_top"]
-            if type(opacity) is not int or not 50 <= opacity <= 100 or type(on_top) is not bool:
-                raise ValueError("透明度或置顶设置无效")
-            return opacity, on_top
-        except FileNotFoundError:
-            return 100, False
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            self._appearance_read_error = (
-                f"窗口设置无法读取（{exc}）。请移走原文件后重启并重新配置：{self._appearance_settings_path}"
-            )
-            return 100, False
-
-    def _save_appearance_settings(self) -> None:
-        self._appearance_save_timer.stop()
-        try:
-            if self._appearance_read_error:
-                raise OSError(self._appearance_read_error)
-            payload = json.dumps(
-                {"schema_version": 1, "opacity": self.opacity.value(), "on_top": self.on_top.isChecked()},
-                ensure_ascii=False, indent=2,
-            ).encode("utf-8") + b"\n"
-            file = QSaveFile(str(self._appearance_settings_path))
-            file.setDirectWriteFallback(False)
-            if not file.open(QIODevice.OpenModeFlag.WriteOnly):
-                raise OSError(file.errorString())
-            if file.write(payload) != len(payload):
-                file.cancelWriting()
-                raise OSError(file.errorString())
-            if not file.commit():
-                raise OSError(file.errorString())
-        except OSError as exc:
-            self.appearance_status.setText(f"当前会话窗口设置未保存：{exc}")
-            self.appearance_status.show()
-        else:
-            self.appearance_status.hide()
-
-    def _change_opacity(self, value: int) -> None:
-        self.opacity_text.setText(f"透明度 {value}%")
-        self.setWindowOpacity(value / 100)
-        self._appearance_save_timer.start()
-
-    def _change_on_top(self, checked: bool) -> None:
-        geometry, state, visible = self.saveGeometry(), self.windowState(), self.isVisible()
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)
-        self.restoreGeometry(geometry)
-        self.setWindowState(state)
-        self.setVisible(visible)
-        self._save_appearance_settings()
-
     def _stats_panel(self) -> QGroupBox:
         group = QGroupBox("02  声骸词条与档位选择")
         layout = QVBoxLayout(group)
-        hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
+        hint = QLabel("选择一种方式录入副词条。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
-        opacity, on_top = self._load_appearance_settings()
-        self.appearance_controls = QWidget(self)
-        appearance = QHBoxLayout(self.appearance_controls)
-        appearance.setContentsMargins(0, 0, 0, 0)
-        appearance.setSpacing(8)
-        self.opacity_text = QLabel(f"透明度 {opacity}%")
-        self.opacity_text.setObjectName("muted")
-        self.opacity = QSlider(Qt.Orientation.Horizontal)
-        self.opacity.setRange(50, 100)
-        self.opacity.setFixedWidth(96)
-        self.opacity.setAccessibleName("窗口透明度")
-        self.opacity.setValue(opacity)
-        self.on_top = QPushButton("置顶")
-        self.on_top.setObjectName("onTop")
-        self.on_top.setCheckable(True)
-        self.on_top.setChecked(on_top)
-        appearance.addWidget(self.opacity_text)
-        appearance.addWidget(self.opacity)
-        appearance.addWidget(self.on_top)
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(hint, 1)
-        toolbar.addWidget(self.appearance_controls)
-        layout.addLayout(toolbar)
-        self.appearance_status = QLabel(self._appearance_read_error)
-        self.appearance_status.setObjectName("muted")
-        self.appearance_status.setWordWrap(True)
-        self.appearance_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.appearance_status.setVisible(bool(self._appearance_read_error))
-        layout.addWidget(self.appearance_status)
-        self._appearance_save_timer = QTimer(self)
-        self._appearance_save_timer.setSingleShot(True)
-        self._appearance_save_timer.setInterval(250)
-        self._appearance_save_timer.timeout.connect(self._save_appearance_settings)
-        self.setWindowOpacity(opacity / 100)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
-        self.opacity.valueChanged.connect(self._change_opacity)
-        self.on_top.toggled.connect(self._change_on_top)
+        self.sub_input_toolbar = QHBoxLayout()
+        self.sub_input_toolbar.addWidget(hint, 1)
+        self.sub_input_toolbar.addWidget(self.appearance_controls)
+        layout.addLayout(self.sub_input_toolbar)
         header = QGridLayout()
-        self.cost = QComboBox()
+        self.cost = WheelSafeComboBox()
         for cost in (1, 3, 4):
             self.cost.addItem(f"{cost} Cost", cost)
         self.cost.setCurrentIndex(2)
-        self.main_stat = QComboBox()
+        self.main_stat = WheelSafeComboBox()
         self.main_value = QLabel()
         self.main_value.setObjectName("muted")
         self.selected_count = QLabel("0 / 5")
         self.selected_count.setObjectName("badge")
         header.addWidget(QLabel("Cost"), 0, 0)
         header.addWidget(self.cost, 0, 1)
-        header.addWidget(QLabel("已选副词条"), 0, 2)
-        selection_toolbar = QHBoxLayout()
-        selection_toolbar.addWidget(self.selected_count)
-        self.clear_sub_stats_button = QPushButton("清空勾选")
-        self.clear_sub_stats_button.setObjectName("clearSelection")
-        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
-        selection_toolbar.addWidget(self.clear_sub_stats_button)
-        header.addLayout(selection_toolbar, 0, 3)
         header.addWidget(QLabel("满级主词条"), 1, 0)
         header.addWidget(self.main_stat, 1, 1)
         header.addWidget(self.main_value, 1, 2, 1, 2)
@@ -911,10 +837,26 @@ class EchoWindow(QMainWindow):
         header.addWidget(self.minor_stat_label, 2, 1)
         header.addWidget(self.minor_value, 2, 2, 1, 2)
         self.minor_stat_label.setContentsMargins(8, 0, 0, 0)
-        layout.addLayout(header)
-        self.stats_divider = self._divider()
-        layout.addWidget(self.stats_divider)
 
+        self.sub_stat_tabs = QTabWidget()
+        manual_page = QWidget()
+        manual_layout = QVBoxLayout(manual_page)
+        manual_layout.addLayout(header)
+        self.stats_divider = self._divider()
+        manual_layout.addWidget(self.stats_divider)
+        manual_hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
+        manual_hint.setObjectName("muted")
+        manual_hint.setWordWrap(True)
+        manual_layout.addWidget(manual_hint)
+        self.selection_toolbar = QHBoxLayout()
+        self.selection_toolbar.addWidget(QLabel("已选副词条"))
+        self.selection_toolbar.addWidget(self.selected_count)
+        self.clear_sub_stats_button = QPushButton("清空勾选")
+        self.clear_sub_stats_button.setObjectName("clearSelection")
+        self.clear_sub_stats_button.clicked.connect(self.clear_sub_stats)
+        self.selection_toolbar.addWidget(self.clear_sub_stats_button)
+        self.selection_toolbar.addStretch()
+        manual_layout.addLayout(self.selection_toolbar)
         options = QGridLayout()
         self.sub_options_layout = options
         options.setHorizontalSpacing(8)
@@ -932,7 +874,7 @@ class EchoWindow(QMainWindow):
             button.toggled.connect(
                 lambda checked, selected_id=stat_id: self._toggle_sub_stat(selected_id, checked)
             )
-            tier = QComboBox()
+            tier = WheelSafeComboBox()
             tier.setMinimumContentsLength(5)
             tier.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             for rank, value in enumerate(self.stats["sub_stats"]["tiers"][stat_id]["values"], 1):
@@ -948,7 +890,13 @@ class EchoWindow(QMainWindow):
             options.addWidget(option, index // 3, index % 3)
         for column in range(3):
             options.setColumnStretch(column, 1)
-        layout.addLayout(options)
+        manual_layout.addLayout(options)
+        manual_layout.addStretch()
+        self.sub_stat_tabs.addTab(manual_page, "点击选择词条")
+        self.sub_stat_tabs.addTab(self.ocr.panel, "截图识别")
+        self.ocr.preview_ready.connect(
+            lambda: self.sub_stat_tabs.setCurrentWidget(self.ocr.panel))
+        layout.addWidget(self.sub_stat_tabs)
         self.cost.currentIndexChanged.connect(self._refresh_main)
         self.main_stat.currentIndexChanged.connect(self._main_changed)
         return group
@@ -1464,6 +1412,8 @@ class EchoWindow(QMainWindow):
             self.stats["minor_stats"]["max_values_by_cost"][str(self.cost.currentData())].items()))
         self.minor_stat_label.setText(self.stats["stat_definitions"][minor_id]["name_zh"])
         self.minor_value.setText(f"+25 固定值：{self._format_value(minor_id, minor_value)}")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
 
     def _toggle_sub_stat(self, stat_id: str, checked: bool) -> None:
@@ -1485,12 +1435,15 @@ class EchoWindow(QMainWindow):
                 self.selected_sub_stats.remove(stat_id)
             self.sub_tier_inputs[stat_id].setEnabled(False)
             self.selected_count.setText(f"{len(self.selected_sub_stats)} / 5")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
 
     def _sub_tier_changed(self, stat_id: str) -> None:
         if self.updating:
             return
         if stat_id in self.selected_sub_stats:
+            self.ocr.input_changed()
             self.calculate()
 
     def clear_sub_stats(self) -> None:
@@ -1502,7 +1455,104 @@ class EchoWindow(QMainWindow):
             tier.setEnabled(False)
         self.selected_sub_stats.clear()
         self.selected_count.setText("0 / 5")
+        if not self.updating:
+            self.ocr.input_changed()
         self.calculate()
+
+    def apply_ocr_sub_stats(self, entries: Sequence[SubStatEntry]) -> bool:
+        return self._apply_ocr_inputs(entries)
+
+    def apply_ocr_selection(self, selection: OcrSelection) -> bool:
+        return self._apply_ocr_inputs(
+            selection.sub_stats, cost=selection.cost,
+            main_stat=selection.main_stat, minor_stat=selection.minor_stat)
+
+    def _apply_ocr_inputs(self, entries: Sequence[SubStatEntry], *,
+                          cost: int | None = None, main_stat: str | None = None,
+                          minor_stat: str | None = None) -> bool:
+        if self._closing:
+            raise ValueError("窗口正在关闭。")
+        selection = validate_selection(entries, self.stats)
+        has_header = cost is not None or main_stat is not None or minor_stat is not None
+        if has_header and (cost is None or main_stat is None or minor_stat is None):
+            raise ValueError("Cost、主词条和固定小词条必须一起提供。")
+        cost_index = self.cost.findData(cost) if cost is not None else self.cost.currentIndex()
+        if cost_index < 0:
+            raise ValueError("识别到的 Cost 不存在，未修改原输入。")
+        target_cost = self.cost.itemData(cost_index)
+        main_pool = self.stats["main_stats"]["max_values_by_cost"][str(target_cost)]
+        minor_pool = self.stats["minor_stats"]["max_values_by_cost"][str(target_cost)]
+        if has_header:
+            if main_stat not in main_pool or minor_pool.get(minor_stat) is None:
+                raise ValueError("识别到的主词条或固定小词条与 Cost 不匹配，未修改原输入。")
+        targets = {}
+        for entry in selection:
+            tier = self.sub_tier_inputs.get(entry.stat_id)
+            index = tier.findData(entry.value) if tier is not None else -1
+            if index < 0 or entry.stat_id not in self.sub_stat_buttons:
+                raise ValueError("目标词条或档位控件不存在，未修改原输入。")
+            targets[entry.stat_id] = index
+        current = {name: self.sub_tier_inputs[name].currentData() for name in self.selected_sub_stats}
+        current_header = (self.cost.currentData(), self.main_stat.currentData())
+        requested_header = (target_cost, main_stat)
+        if (current == {entry.stat_id: entry.value for entry in selection}
+                and (not has_header or current_header == requested_header)):
+            return False
+
+        old_count = self.selected_count.text()
+        old_selection = list(self.selected_sub_stats)
+        old_cost_index = self.cost.currentIndex()
+        old_main_stat = self.main_stat.currentData()
+        states = [
+            (stat_id, button, self.sub_tier_inputs[stat_id], button.isChecked(),
+             self.sub_tier_inputs[stat_id].currentIndex(),
+             not self.sub_tier_inputs[stat_id].testAttribute(Qt.WidgetAttribute.WA_ForceDisabled))
+            for stat_id, button in self.sub_stat_buttons.items()
+        ]
+        was_updating = self.updating
+        with ExitStack() as signals:
+            signals.enter_context(QSignalBlocker(self.cost))
+            signals.enter_context(QSignalBlocker(self.main_stat))
+            for _, button, tier, *_ in states:
+                signals.enter_context(QSignalBlocker(button))
+                signals.enter_context(QSignalBlocker(tier))
+            self.updating = True
+            try:
+                if has_header:
+                    self.cost.setCurrentIndex(cost_index)
+                    self._refresh_main()
+                    main_index = self.main_stat.findData(main_stat)
+                    if main_index < 0:
+                        raise ValueError("目标主词条控件不存在，未修改原输入。")
+                    self.main_stat.setCurrentIndex(main_index)
+                    self._main_changed()
+                for stat_id, button, tier, *_ in states:
+                    selected = stat_id in targets
+                    button.setChecked(selected)
+                    if selected:
+                        tier.setCurrentIndex(targets[stat_id])
+                    tier.setEnabled(selected)
+                self.selected_sub_stats = list(targets)
+                self.selected_count.setText(f"{len(targets)} / 5")
+            except Exception:
+                self.cost.setCurrentIndex(old_cost_index)
+                self._refresh_main()
+                old_main_index = self.main_stat.findData(old_main_stat)
+                if old_main_index >= 0:
+                    self.main_stat.setCurrentIndex(old_main_index)
+                self._main_changed()
+                for _, button, tier, checked, index, enabled in states:
+                    button.setChecked(checked)
+                    tier.setCurrentIndex(index)
+                    tier.setEnabled(enabled)
+                self.selected_sub_stats = old_selection
+                self.selected_count.setText(old_count)
+                raise
+            finally:
+                self.updating = was_updating
+        self.ocr.input_changed()
+        self.calculate()
+        return True
 
     def current_weights(self) -> dict[str, Any]:
         return {"schema_version": 1, "description": WEIGHTS_DESCRIPTION,
@@ -1701,16 +1751,22 @@ class EchoWindow(QMainWindow):
         self._update_progress_status(current)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._closing and not self._confirm_unsaved_weights():
+        if not self._closing:
+            if not self._confirm_unsaved_weights():
+                event.ignore()
+                return
+            self._closing = True
+            self._strategy_version += 1
+            self._strategy_timer.stop()
+            self._strategy_pending = None
+            self._strategy_cancelled.set()
+            self._reconstruction_version += 1
+            self._reconstruction_timer.stop()
+            self._reconstruction_pending = None
+            self._reconstruction_cancelled.set()
+        if not self.ocr.begin_close():
             event.ignore()
             return
-        if self._appearance_save_timer.isActive():
-            self._save_appearance_settings()
-        self._closing = True
-        self._strategy_version += 1
-        self._strategy_timer.stop()
-        self._strategy_pending = None
-        self._strategy_cancelled.set()
         if self._strategy_task is not None:
             self._strategy_task.signals.finished.disconnect(self._strategy_finished)
         # analyze 无中断 API，关闭时等待唯一在途任务退出，不强杀线程。
@@ -1718,10 +1774,6 @@ class EchoWindow(QMainWindow):
         self._strategy_pool.waitForDone()
         self._strategy_task = None
         self._strategy_cache.clear()
-        self._reconstruction_version += 1
-        self._reconstruction_timer.stop()
-        self._reconstruction_pending = None
-        self._reconstruction_cancelled.set()
         if self._reconstruction_task is not None:
             self._reconstruction_task.signals.finished.disconnect(self._reconstruction_finished)
         self._reconstruction_pool.waitForDone()

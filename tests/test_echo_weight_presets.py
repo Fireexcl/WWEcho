@@ -17,21 +17,24 @@ from src.echo_weight_presets import DEFAULT_PRESET_NAME, WeightPresetStore, norm
 
 class WeightPresetPathTests(unittest.TestCase):
     def test_source_path_uses_project_root_not_python_or_working_directory(self):
-        from lite import echo_gui
+        from src.full import echo_gui as full_gui
+        from src.lite import echo_gui as lite_gui
 
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "源码 项目"
-            with patch.object(sys, "frozen", False, create=True), \
+            for edition, echo_gui in (("lite", lite_gui), ("full", full_gui)):
+                with self.subTest(edition=edition), \
+                    patch.object(sys, "frozen", False, create=True), \
                     patch.object(sys, "executable", str(root / ".venv" / "bin" / "python")), \
-                    patch.object(echo_gui, "__file__", str(root / "lite" / "echo_gui.py")), \
+                    patch.object(echo_gui, "__file__", str(root / "src" / edition / "echo_gui.py")), \
                     patch("os.getcwd", return_value=str(root.parent / "启动目录")), \
                     patch.object(echo_gui.QStandardPaths, "writableLocation") as user_location:
-                self.assertEqual(echo_gui.weight_presets_path(), root / "weight-presets.json")
-            user_location.assert_not_called()
+                    self.assertEqual(echo_gui.weight_presets_path(), root / "weight-presets.json")
+                user_location.assert_not_called()
             self.assertFalse(root.exists())
 
     def test_frozen_path_uses_executable_directory_not_unpack_or_working_directory(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "EXE 程序"
@@ -48,7 +51,7 @@ class WeightPresetPathTests(unittest.TestCase):
             self.assertFalse(unpack.exists())
 
     def test_macos_bundle_saves_beside_app_not_inside_bundle(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "便携 目录"
@@ -64,7 +67,7 @@ class WeightPresetPathTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
     def test_macos_frozen_without_app_keeps_executable_directory(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         with patch.object(sys, "platform", "darwin"), \
                 patch.object(sys, "frozen", True, create=True), \
@@ -73,7 +76,7 @@ class WeightPresetPathTests(unittest.TestCase):
                              / "weight-presets.json")
 
     def test_macos_initial_library_comes_from_bundle_resources(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         with TemporaryDirectory() as directory:
             resources = Path(directory).resolve() / "WWEcho.app" / "Contents" / "Resources"
@@ -89,7 +92,7 @@ class WeightPresetPathTests(unittest.TestCase):
             legacy.assert_not_called()
 
     def test_windows_initial_library_comes_from_embedded_resources(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "EXE 程序"
@@ -109,7 +112,7 @@ class WeightPresetPathTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
     def test_missing_frozen_template_is_reported_instead_of_using_default_weights(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         for platform in ("darwin", "win32"):
             with self.subTest(platform=platform), TemporaryDirectory() as directory:
@@ -124,7 +127,7 @@ class WeightPresetPathTests(unittest.TestCase):
                 self.assertFalse(resources.exists())
 
     def test_source_initial_library_keeps_legacy_migration(self):
-        from lite import echo_gui
+        from src.lite import echo_gui
 
         for platform in ("darwin", "win32", "linux"):
             with self.subTest(platform=platform), \

@@ -4,7 +4,7 @@
 
 > 首版范围已收敛，以 [代码实施方案](OCR-Implementation-Plan.md) 为准：识别 Cost、主词条、固定小词条及已开 1～5 条副词条；用户点击识别后，完整、合法且唯一的结果自动回填并保留可编辑预览，修改后可再次确认。实时监测、全局快捷键和全屏定位仍为后续能力，下文保留为总体设计参考。
 >
-> 分发要求：Windows 11 x64 同时提供整合单文件 EXE 与 EXE＋依赖目录两种发行包；macOS Apple Silicon 提供内置依赖的 `.app`。三种产物均随包提供 OCR 运行库和模型，离线可用，无需用户安装 Python 或单独启动 OCR 工具。
+> 分发要求：Windows 11 x64 提供整合单文件 EXE；macOS Apple Silicon 提供内置依赖的 `.app`。两种产物均随包提供 OCR 运行库和模型，离线可用，无需用户安装 Python 或单独启动 OCR 工具。
 
 ### 1. 目标与范围
 
@@ -72,7 +72,7 @@ OCR 依赖和模型延迟加载，实例在识别工作队列内复用。先验�
 
 ### 4. 解析与数据契约
 
-以 [词条配置](config/echo-stats.json) 为唯一档位来源，不复制维护另一份数值表。
+以 [词条配置](../config/echo-stats.json) 为唯一档位来源，不复制维护另一份数值表。
 
 OCR 中间结果保留文本、边界框、置信度；解析结果保留原始行、候选 `stat_id`、数值、匹配档位及问题列表。跨线程传递结构化数据和独立图像快照，不传递控件。
 
@@ -101,7 +101,7 @@ OCR 中间结果保留文本、边界框、置信度；解析结果保留原始�
 
 ### 5. 异步与回填一致性
 
-参考 [GUI](../full/echo_gui.py) 的 `QRunnable`、信号和版本机制，但 OCR 使用独立串行队列，不占用策略／洗炼队列：
+参考 [GUI](../src/full/echo_gui.py) 的 `QRunnable`、信号和版本机制，但 OCR 使用独立串行队列，不占用策略／洗炼队列：
 
 - 屏幕访问、控件更新在 GUI 线程进行；耗时图像处理和 OCR 在后台执行。
 - 每次请求记录请求编号、区域配置版本、输入版本和监测会话编号。更换区域、修改输入、暂停或关闭窗口后使旧请求失效。
@@ -129,14 +129,14 @@ OCR 中间结果保留文本、边界框、置信度；解析结果保留原始�
 
 | 位置                                                           | 改动                                                               |
 | -------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [full/echo_gui.py](../full/echo_gui.py) | 区域 2 入口、透明度滑块、状态、批量应用、暂停和关闭生命周期 |
-| `full/echo_capture.py` | 屏幕截图、区域框选、坐标转换与区域有效性检查 |
-| `full/echo_ocr.py` | OCR 引擎适配、类型化识别结果和独立词条解析校验 |
+| [src/full/echo_gui.py](../src/full/echo_gui.py) | 区域 2 入口、透明度滑块、状态、批量应用、暂停和关闭生命周期 |
+| `src/full/echo_capture.py` | 屏幕截图、区域框选、坐标转换与区域有效性检查 |
+| `src/full/echo_ocr.py` | OCR 引擎适配、类型化识别结果和独立词条解析校验 |
 | [config/echo-stats.json](../config/echo-stats.json) | 复用现有词条及档位；仅在需要时增加明确的名称别名来源 |
-| [OCR 依赖](../full/requirements-ocr.txt) | 样本验证后添加兼容的 OCR 依赖；全局快捷键依赖按平台验证后决定 |
-| [full/WWEcho.spec](../full/WWEcho.spec) | 收集模型、推理动态库及必要导入；验证冻结环境下的资源路径 |
-| [构建依赖](../full/requirements-build.txt)与构建脚本（[macOS](../full/build-macos.sh)、[Windows](../full/build-windows.bat)） | 按最终引擎调整构建 |
-| [full/tests/](../full/tests/) | 解析单测、截图坐标测试、GUI 异步与批量应用测试、真实样本回归 |
+| [OCR 依赖](../src/full/requirements-ocr.txt) | 样本验证后添加兼容的 OCR 依赖；全局快捷键依赖按平台验证后决定 |
+| [src/full/WWEcho.spec](../src/full/WWEcho.spec) | 收集模型、推理动态库及必要导入；验证冻结环境下的资源路径 |
+| [构建依赖](../src/full/requirements-build.txt)与构建脚本（[macOS](../src/full/build-macos.sh)、[Windows](../src/full/build-windows.bat)） | 按最终引擎调整构建 |
+| [tests/full/](../tests/full/) | 解析单测、截图坐标测试、GUI 异步与批量应用测试、真实样本回归 |
 | [README.md](../README.md) | 使用流程、平台权限、支持范围、快捷键、模型与离线说明 |
 
 优先随安装包分发经许可的模型，避免首次运行隐式下载；核对模型与依赖许可证、署名要求及安装包增量。打包版在断网、无开发环境的设备上验证；OCR 初始化失败时明确提示，并保留手动功能。

@@ -3,7 +3,6 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import json
 import threading
 import time
 import unittest
@@ -11,14 +10,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QSaveFile, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, Signal
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
-from full.echo_capture import CaptureError, CaptureRegion, CaptureSnapshot, Rect, ScreenInfo
-from full.echo_gui import EchoWindow
-from full.echo_ocr import OcrError, OcrToken, SubStatEntry
-from full.echo_ocr_gui import OcrSettings, OcrSettingsStore
+from src.full.echo_capture import CaptureError, CaptureRegion, CaptureSnapshot, Rect, ScreenInfo
+from src.full.echo_gui import EchoWindow
+from src.full.echo_ocr import OcrError, OcrToken, SubStatEntry
+from src.full.echo_ocr_gui import OcrSettings
 
 
 REGION = CaptureRegion(ScreenInfo("test", "", "", "", Rect(-3000, 0, 1440, 900), 1.5),
@@ -77,17 +76,18 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.directory = Path(directory.name)
         self.presets_path = self.directory / "weight-presets.json"
         self.settings_path = self.directory / "ocr-settings.json"
-        OcrSettingsStore(self.settings_path).save(OcrSettings(REGION))
         self.engine = ControlledEngine()
-        self.start_patch("full.echo_ocr_gui.LocalOcrEngine", return_value=self.engine)
-        self.start_patch("full.echo_ocr_gui.resolve_screen")
-        self.capture = self.start_patch("full.echo_ocr_gui.capture_region", side_effect=self.snapshot)
-        self.start_patch("full.echo_ocr_gui.RegionPicker", side_effect=ControlledPicker)
-        self.start_patch("full.echo_gui.EchoWindow._start_strategy", lambda _window: None)
+        self.start_patch("src.full.echo_ocr_gui.LocalOcrEngine", return_value=self.engine)
+        self.start_patch("src.full.echo_ocr_gui.resolve_screen")
+        self.capture = self.start_patch("src.full.echo_ocr_gui.capture_region", side_effect=self.snapshot)
+        self.start_patch("src.full.echo_ocr_gui.RegionPicker", side_effect=ControlledPicker)
+        self.start_patch("src.full.echo_gui.EchoWindow._start_strategy", lambda _window: None)
         self.window = EchoWindow(presets_path=self.presets_path)
         self.window.show()
         self.app.processEvents()
         self.ocr = self.window.ocr
+        self.ocr.settings = OcrSettings(REGION)
+        self.ocr._idle("识别区已设置。")
 
     def start_patch(self, *args, **kwargs):
         patcher = patch(*args, **kwargs)
@@ -135,8 +135,7 @@ class EchoOcrGuiTests(unittest.TestCase):
                          [preview.validation])
 
     def test_require_configuration_and_keep_manual_available(self):
-        other = self.directory / "other.json"
-        window = EchoWindow(presets_path=self.presets_path, ocr_settings_path=other)
+        window = EchoWindow(presets_path=self.presets_path)
         try:
             self.assertFalse(window.ocr.recognize_button.isEnabled())
             window.ocr.recognize()
@@ -646,11 +645,17 @@ class EchoOcrGuiTests(unittest.TestCase):
         picker.finished.emit(region, "")
         self.assertTrue(picker.disposed)
         self.assertEqual(self.ocr.settings.region, region)
-        self.assertEqual(OcrSettingsStore(self.settings_path).load().region, region)
+        self.assertFalse(self.settings_path.exists())
         self.assertEqual(self.ocr.region_version, 1)
         self.assertEqual(self.window.current_echo(), applied)
         self.assertTrue(self.ocr.recognize_button.isEnabled())
         self.assertEqual(self.capture.call_count, 1)
+        for _ in range(2):
+            preview = self.recognize()
+            self.assertEqual(self.capture.call_args.args[0], region)
+            preview.cancel()
+        self.assertEqual(self.capture.call_count, 3)
+        self.assertFalse(self.settings_path.exists())
 
     def test_preview_has_no_notice_in_any_recognition_or_edit_state(self):
         examples = (
@@ -725,7 +730,7 @@ class EchoOcrGuiTests(unittest.TestCase):
                          [{"name": "crit_rate", "value": 10.5},
                           {"name": "crit_dmg", "value": 21}])
 
-    def test_reselect_invalidates_inflight_request_and_persists_new_region(self):
+    def test_reselect_invalidates_inflight_request_and_keeps_new_region_in_memory(self):
         self.engine.gate.clear()
         self.ocr.recognize()
         self.wait_until(self.engine.started.is_set)
@@ -736,7 +741,8 @@ class EchoOcrGuiTests(unittest.TestCase):
         picker.finished.emit(new_region, "")
         self.assertTrue(picker.disposed)
         self.assertEqual(self.ocr.region_version, 1)
-        self.assertEqual(OcrSettingsStore(self.settings_path).load().region, new_region)
+        self.assertEqual(self.ocr.settings.region, new_region)
+        self.assertFalse(self.settings_path.exists())
         self.assertFalse(self.ocr.recognize_button.isEnabled())
         self.engine.gate.set()
         self.wait_until(self.ocr.recognize_button.isEnabled)
@@ -757,7 +763,7 @@ class EchoOcrGuiTests(unittest.TestCase):
                 self.assertEqual(self.window.normalGeometry(), normal)
                 self.assertTrue(self.window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
                 self.assertEqual(self.ocr.settings.region, REGION)
-                self.assertEqual(OcrSettingsStore(self.settings_path).load().region, REGION)
+                self.assertFalse(self.settings_path.exists())
 
     def test_overlapping_capture_minimizes_even_at_reduced_opacity_and_restores_on_error(self):
         screen = ScreenInfo("test", "", "", "", Rect(0, 0, 2000, 2000), 1)
@@ -825,45 +831,26 @@ class EchoOcrGuiTests(unittest.TestCase):
         self.assertFalse(self.window.updating)
         self.assertFalse(self.window.sub_stat_buttons["atk_flat"].isChecked())
 
-    def test_window_settings_round_trip_and_unwritable_feedback(self):
+    def test_settings_are_session_only_and_ignore_existing_file(self):
         self.ocr.opacity.setValue(60)
         self.ocr.on_top.click()
-        self.assertEqual(OcrSettingsStore(self.settings_path).load(), OcrSettings(REGION, 60, True))
-        self.ocr.on_top.click()
-        self.assertEqual(OcrSettingsStore(self.settings_path).load(), OcrSettings(REGION, 60, False))
-        self.assertEqual(self.ocr.opacity.value(), 60)
-        self.ocr.store.path = self.directory / "missing-dir" / "ocr-settings.json"
-        self.ocr.on_top.click()
-        self.assertIn("未保存", self.ocr.settings_status.text())
-        self.assertTrue(self.ocr.settings.on_top)
-
-
-class OcrSettingsTests(unittest.TestCase):
-    def test_missing_malformed_unknown_version_and_atomic_failure(self):
-        with TemporaryDirectory() as root:
-            path = Path(root) / "ocr-settings.json"
-            self.assertEqual(OcrSettingsStore(path).load(), OcrSettings())
-            for content in ("invalid json", json.dumps({"schema_version": 2})):
-                with self.subTest(content=content):
-                    path.write_text(content, encoding="utf-8")
-                    store = OcrSettingsStore(path)
-                    self.assertEqual(store.load(), OcrSettings())
-                    self.assertIn("重新配置", store.read_error)
-                    with self.assertRaises(OSError):
-                        store.save(OcrSettings(REGION))
-                    self.assertEqual(path.read_text(encoding="utf-8"), content)
-            store = OcrSettingsStore(path)
-            store.save(OcrSettings(REGION))
-            before = path.read_bytes()
-
-            class CancelledSave(QSaveFile):
-                def commit(self):
-                    self.cancelWriting()
-                    return super().commit()
-
-            with patch("full.echo_ocr_gui.QSaveFile", CancelledSave), self.assertRaises(OSError):
-                store.save(OcrSettings(REGION, 65, True))
-            self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.ocr.settings, OcrSettings(REGION, 60, True))
+        self.window.close()
+        self.assertFalse(self.settings_path.exists())
+        legacy = '{"schema_version": 1, "opacity": 55, "on_top": true, "region": null}'
+        self.settings_path.write_text(legacy, encoding="utf-8")
+        restored = EchoWindow(presets_path=self.presets_path)
+        try:
+            self.assertEqual(restored.ocr.settings, OcrSettings())
+            self.assertEqual(restored.ocr.opacity.value(), 100)
+            self.assertFalse(restored.ocr.on_top.isChecked())
+            self.assertFalse(restored.ocr.recognize_button.isEnabled())
+            restored.ocr.on_top.click()
+            self.assertEqual(self.settings_path.read_text(encoding="utf-8"), legacy)
+        finally:
+            restored.close()
+            restored.deleteLater()
+        self.assertEqual(self.settings_path.read_text(encoding="utf-8"), legacy)
 
 
 if __name__ == "__main__":

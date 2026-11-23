@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from full.echo_capture import (
+from src.full.echo_capture import (
     CaptureError, CaptureRegion, Rect, RegionPicker, ScreenInfo, _check_permission,
     capture_region, pixel_rect, region_from_drag, screen_index,
 )
@@ -59,9 +59,9 @@ class EchoCaptureTests(unittest.TestCase):
         frame.setDevicePixelRatio(1.5)
         screen = Mock()
         screen.grabWindow.return_value = frame
-        with patch("full.echo_capture.resolve_screen", return_value=screen), \
-                patch("full.echo_capture._check_permission"), \
-                patch("full.echo_capture.sys", SimpleNamespace(platform="darwin")):
+        with patch("src.full.echo_capture.resolve_screen", return_value=screen), \
+                patch("src.full.echo_capture._check_permission"), \
+                patch("src.full.echo_capture.sys", SimpleNamespace(platform="darwin")):
             snapshot = capture_region(self.region, 12)
         screen.grabWindow.assert_called_once_with(0)
         self.assertEqual((snapshot.width, snapshot.height, snapshot.region_version), (32, 26, 12))
@@ -73,8 +73,8 @@ class EchoCaptureTests(unittest.TestCase):
         frame.fill(QColor("blue"))
         screen = Mock()
         screen.grabWindow.return_value = frame
-        with patch("full.echo_capture.resolve_screen", return_value=screen), \
-                patch("full.echo_capture.sys", SimpleNamespace(platform="win32")):
+        with patch("src.full.echo_capture.resolve_screen", return_value=screen), \
+                patch("src.full.echo_capture.sys", SimpleNamespace(platform="win32")):
             snapshot = capture_region(self.region)
         screen.grabWindow.assert_called_once_with(0, 12, 4, 21, 17)
         self.assertEqual((snapshot.width, snapshot.height), (32, 26))
@@ -83,16 +83,16 @@ class EchoCaptureTests(unittest.TestCase):
         black = QPixmap(300, 120)
         black.fill(QColor("black"))
         for frame, error in ((QPixmap(), "空截图"), (QPixmap(400, 100), "尺寸"), (black, "全黑或不可读")):
-            with self.subTest(error=error), patch("full.echo_capture._check_permission"), \
-                    patch("full.echo_capture.sys", SimpleNamespace(platform="darwin")), \
-                    patch("full.echo_capture.resolve_screen") as resolve:
+            with self.subTest(error=error), patch("src.full.echo_capture._check_permission"), \
+                    patch("src.full.echo_capture.sys", SimpleNamespace(platform="darwin")), \
+                    patch("src.full.echo_capture.resolve_screen") as resolve:
                 resolve.return_value.grabWindow.return_value = frame
                 with self.assertRaisesRegex(CaptureError, error):
                     capture_region(self.region)
 
     def test_macos_permission_denial_is_not_reported_as_black(self):
-        with patch("full.echo_capture.sys", SimpleNamespace(platform="darwin")), \
-                patch("full.echo_capture.ctypes.CDLL") as load:
+        with patch("src.full.echo_capture.sys", SimpleNamespace(platform="darwin")), \
+                patch("src.full.echo_capture.ctypes.CDLL") as load:
             graphics = load.return_value
             graphics.CGPreflightScreenCaptureAccess.return_value = False
             graphics.CGRequestScreenCaptureAccess.return_value = False
@@ -105,9 +105,9 @@ class EchoCaptureTests(unittest.TestCase):
         info = ScreenInfo("test", "", "", "", Rect.from_qrect(screen.geometry()), 1)
         frame = QPixmap(info.geometry.width, info.geometry.height)
         frame.fill(QColor("blue"))
-        with patch("full.echo_capture._full_screen", return_value=frame), \
-                patch("full.echo_capture.ScreenInfo.from_screen", return_value=info), \
-                patch("full.echo_capture._check_permission"):
+        with patch("src.full.echo_capture._full_screen", return_value=frame), \
+                patch("src.full.echo_capture.ScreenInfo.from_screen", return_value=info), \
+                patch("src.full.echo_capture._check_permission"):
             for cancel in (False, True):
                 picker = RegionPicker(self.app)
                 selections = []

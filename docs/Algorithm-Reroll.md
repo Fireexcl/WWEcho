@@ -1,6 +1,6 @@
 # 洗炼／洗词条算法：频整器概率、收益与消耗
 
-实现见 [单次计算](../src/echo_reconstruction.py)、[动态预算计算](../src/echo_reconstruction_budget.py) 与窗口（[Lite](../lite/echo_gui.py)、[Full](../full/echo_gui.py)）。仅用于**已开满五条副词条**的五星声骸；锁定 1～4 条时，每次分别消耗 1、1、2、3 枚频整器，其余词条的属性、档位全部重新随机。材料口径来自本功能需求，不把它包装成新增核实的官方成本公示。
+实现见 [单次计算](../src/echo_reconstruction.py)、[动态预算计算](../src/echo_reconstruction_budget.py) 与窗口（[Lite](../src/lite/echo_gui.py)、[Full](../src/full/echo_gui.py)）。仅用于**已开满五条副词条**的五星声骸；锁定 1～4 条时，每次分别消耗 1、1、2、3 枚频整器，其余词条的属性、档位全部重新随机。材料口径来自本功能需求，不把它包装成新增核实的官方成本公示。
 
 ## 1. 输入与操作
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 EDITION_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(dirname -- "$EDITION_DIR")"
+ROOT="$(dirname -- "$(dirname -- "$EDITION_DIR")")"
 cd -- "$ROOT"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -21,7 +21,7 @@ fi
 "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "Build failed: Python 3.9 or newer is required.")'
 
 if [[ ! -f "$ROOT/weight-presets.json" ]]; then
-    printf '%s\n' 'Build failed: weight-presets.json is required as the initial preset library. Run ./run.sh to create it, or export a library to this path.' >&2
+    printf '%s\n' 'Build failed: weight-presets.json is required as the initial preset library. Run ./bin/run-lite.sh to create it, or export a library to this path.' >&2
     exit 1
 fi
 
@@ -31,6 +31,6 @@ PYINSTALLER_CONFIG_DIR="$EDITION_DIR/build/pyinstaller" \
     "$PYTHON" -m PyInstaller --noconfirm --clean --workpath "$EDITION_DIR/build" \
     --distpath "$EDITION_DIR/dist" "$EDITION_DIR/WWEcho.spec"
 
-printf '\nLite build complete: %s/dist/WWEcho声骸工作台.app\n' "$EDITION_DIR"
-printf '%s\n' 'Presets and window settings are saved next to the .app. Use a writable folder.'
+printf '\nLite build complete: %s/dist/WWEcho声骸工作台-Lite.app\n' "$EDITION_DIR"
+printf '%s\n' 'Presets are saved next to the .app. Use a writable folder.'
 printf '%s\n' 'This is a local, ad-hoc-signed build, not a Developer ID signed/notarized release.'

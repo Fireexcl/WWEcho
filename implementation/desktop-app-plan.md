@@ -13,7 +13,7 @@
 5. 部分权重由系统计算，其余由预设或用户设置提供。
 6. 预留 OCR 识别当前词条的扩展能力；第一版允许手动录入。
 
-沿用 [总体定义与术语](General-Definition.md) 和 [属性概率配置](../config/echo-stats.json)。主词条已筛选确定，不估计其获取概率及刷取成本。
+沿用 [总体定义与术语](../docs/General-Definition.md) 和 [属性概率配置](../config/echo-stats.json)。主词条已筛选确定，不估计其获取概率及刷取成本。
 
 ## 2. 技术选型
 
@@ -43,7 +43,7 @@
 
 ### macOS 发布实现
 
-- Lite 两平台使用 [lite/WWEcho.spec](../lite/WWEcho.spec)，在 macOS 通过 [lite/build-macos.sh](../lite/build-macos.sh) 构建独立 `.app`；Windows 仍构建单文件 EXE。Full 的单独构建入口见 [Lite / Full 方案](./Lite-Full-Build-Plan.md)。
+- Lite 两平台使用 [src/lite/WWEcho.spec](../src/lite/WWEcho.spec)，在 macOS 通过 [src/lite/build-macos.sh](../src/lite/build-macos.sh) 构建独立 `.app`；Windows 仍构建单文件 EXE。Full 的单独构建入口见 [Lite / Full 方案](./Lite-Full-Build-Plan.md)。
 - 权重采用便携式存储，保存到 `.app` 同级的 `weight-presets.json`，不写入应用包或用户应用数据目录。程序所在目录需可写；移动时同时携带 JSON，升级仅替换 `.app`。
 - 与 Windows 一样，构建时把当前项目方案库作为只读模板打包；外部库不存在时复制全部方案和最近选择，已有库绝不覆盖。打包版不自动读取旧版用户目录；源码迁移规则不变。
 - 当前仅提供本地 ad-hoc 签名，未做 Developer ID 签名/公证。对外发布需另行处理 Gatekeeper 与 App Translocation；详细使用限制见 [README](../README.md#macos-应用打包与使用)。

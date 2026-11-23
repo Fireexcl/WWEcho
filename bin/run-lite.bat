@@ -1,8 +1,8 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.." || exit /b 1
 
-set "PYTHON=%CD%\.venv\Scripts\python.exe"
+set "PYTHON=%CD%\src\lite\.venv\Scripts\python.exe"
 if exist "%PYTHON%" goto check_dependencies
 
 where py >nul 2>&1
@@ -10,12 +10,12 @@ if not errorlevel 1 goto create_with_launcher
 where python >nul 2>&1
 if errorlevel 1 goto python_missing
 
-python -m venv .venv
+python -m venv "%CD%\src\lite\.venv"
 if errorlevel 1 goto setup_failed
 goto check_dependencies
 
 :create_with_launcher
-py -3 -m venv .venv
+py -3 -m venv "%CD%\src\lite\.venv"
 if errorlevel 1 goto setup_failed
 
 :check_dependencies
@@ -33,7 +33,7 @@ echo Installing project dependencies...
 if errorlevel 1 goto install_failed
 
 :launch
-"%PYTHON%" -m lite.echo_gui %*
+"%PYTHON%" -m src.lite.echo_gui %*
 if errorlevel 1 goto launch_failed
 exit /b 0
 

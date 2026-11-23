@@ -1,10 +1,12 @@
 # 声骸评分原型
 
-评分核心使用 Python 标准库；策略计算使用 NumPy，独立窗口使用 PySide6，依赖见 [requirements.txt](requirements.txt)。当前代码兼容 Python 3.9+；新环境建议使用 Python 3.12。计算入口在 [src/echo_score.py](src/echo_score.py)，窗口入口在 [src/echo_gui.py](src/echo_gui.py)。
+> 历史说明，仅供参考；当前版本的启动和构建方式以 [README](../README.md) 为准。
+
+评分核心使用 Python 标准库；策略计算使用 NumPy，独立窗口使用 PySide6，依赖见 [requirements.txt](../requirements.txt)。当前代码兼容 Python 3.9+；新环境建议使用 Python 3.12。计算入口在 [src/echo_score.py](../src/echo_score.py)，Lite 窗口入口在 [src/lite/echo_gui.py](../src/lite/echo_gui.py)。
 
 ## 独立窗口 GUI
 
-Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.exe) 直接运行，无需在目标电脑安装 Python 或项目依赖。该单文件程序包含 GUI 依赖和默认配置；首次打开可能需要几秒解压。要自行构建或更新 EXE，在 Windows 上双击 [build-windows.bat](build-windows.bat)，脚本会安装构建依赖并生成 `dist/WWEcho声骸工作台.exe`；构建机需要 Python 3.9+ 和网络连接。macOS 用户可双击 [WWEcho声骸工作台.app](dist/WWEcho声骸工作台.app) 运行，无需 Python；构建方式和便携式数据说明见下文。也可在开发环境双击 [run.bat](run.bat)，或在 macOS/Linux/WSL 安装虚拟环境依赖后执行 `./run.sh` 启动源码版本。启动脚本都会定位项目目录并使用虚拟环境的 Python，不需要手动激活；从其他目录也可通过脚本的绝对路径启动。窗口分为四个区域：
+Windows 用户可双击 `WWEcho声骸工作台.exe` 直接运行，无需在目标电脑安装 Python 或项目依赖。该单文件程序包含 GUI 依赖和默认配置；首次打开可能需要几秒解压。要自行构建或更新 Lite EXE，在 Windows 上双击 [build-windows.bat](../src/lite/build-windows.bat)，脚本会安装构建依赖并生成 `src/lite/dist/WWEcho声骸工作台.exe`；构建机需要 Python 3.9+ 和网络连接。macOS 用户可双击 `WWEcho声骸工作台.app` 运行，无需 Python；构建方式和便携式数据说明见下文。也可在开发环境双击 [bin/run-lite.bat](../bin/run-lite.bat)，或在 macOS/Linux/WSL 安装虚拟环境依赖后执行 `./bin/run-lite.sh` 启动源码版本。启动脚本都会定位项目目录并使用虚拟环境的 Python，不需要手动激活；从其他目录也可通过脚本的绝对路径启动。窗口分为四个区域：
 
 1. **上方权重配置**：通过下拉框切换不同角色、队伍的权重方案，支持“保存修改”“另存为”，并在“管理”菜单中重命名、删除。JSON 导出包含全部方案；导入仅支持方案库结构，按 ID 去重后追加，不覆盖已有方案。首次自动以“默认-爱弥斯-企鹅bot”保存现有默认值；所有方案均可编辑，至少保留一个。副词条、Cost 1/3/4 主词条及小词条仍分为五个标签页，同名主词条在不同 Cost 下可独立编辑；小词条页仅有 Cost 4 固定攻击、Cost 3 固定攻击、Cost 1 固定生命三项。数值支持 0～1000000、最多四位小数，非零权重以橙色提醒，各页右下角“一键清零”只清空当前页；旁边的“放弃修改”仅在有未保存修改时显示，点击后恢复当前方案全部五页的已保存权重，不是初始默认值。下拉选项列表保持白底中性文字，仅选中项浅蓝高亮，不继承收起字段的状态配色。收起后的方案字段在已保存状态为浅蓝色；修改立即计分，未保存时显示“原方案名（有修改）”并呈浅橙色，区域 3 明细表上方仍显示红字“当前为自定义权重”。保存、还原原值或放弃修改后恢复方案名称和浅蓝色，并隐藏“放弃修改”。修改不改变原方案的 ID 和保存目标。切换方案或关闭窗口前，可选择保存、放弃或取消；方案库合并则保留当前选择和草稿，不要求放弃编辑。启动自动恢复上次选中的已保存方案。
 2. **中间词条选择**：选择 1/3/4 Cost，主词条候选和 +25 满级值随 Cost 更新；每次切换时 Cost 1/3 默认选攻击百分比，Cost 4 默认选暴击率。固定小词条自动显示 Cost 1 固定生命 2280、Cost 3 固定攻击 100、Cost 4 固定攻击 150，不可手动改写。初始不勾选任何副词条，可选 0～5 个不同副词条并设置档位，切换 Cost 不清空副词条。
@@ -15,11 +17,11 @@ Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.e
 
 区域3同时显示从零词条开始与当前已激活状态的结果，激活经验、打孔器及回收规则使用用户提供并确认的数据；区域 4 按锁数对应的 1/1/2/3 枚计算频整器消耗。源码版独立窗口支持 macOS/Windows；单文件 EXE 面向 Windows 11 x64，macOS 使用独立 .app 应用包。
 
-“是否继续激活下一词条”的算法见 [调频／开孔算法说明](docs/Algorithm-Tuning.md)。已实现 1000 格概率动态规划与 Dinkelbach 累计成本最优停止，替代旧的“低于新胚子概率就弃置”规则；最优性只针对当前网格与成本模型，不代表精确游戏最优或固定预算内最高成功率。
+“是否继续激活下一词条”的算法见 [调频／开孔算法说明](../docs/Algorithm-Tuning.md)。已实现 1000 格概率动态规划与 Dinkelbach 累计成本最优停止，替代旧的“低于新胚子概率就弃置”规则；最优性只针对当前网格与成本模型，不代表精确游戏最优或固定预算内最高成功率。
 
 ### macOS 应用打包与使用
 
-在 macOS 项目目录执行 `./build-macos.sh`，生成 [dist/WWEcho声骸工作台.app](dist/WWEcho声骸工作台.app)。脚本使用或创建 `.venv`，安装 [构建依赖](requirements-build.txt)，并用同一份 [WWEcho.spec](WWEcho.spec) 构建包含 Python、Qt、NumPy 和默认配置的独立应用。构建机需 Python 3.9+ 和网络；架构与构建环境一致（Apple Silicon Python 生成 arm64，并非 Intel/通用包），最低系统版本由 Python/Qt 等依赖决定。
+在 macOS 项目目录执行 `./src/lite/build-macos.sh`，生成 `src/lite/dist/WWEcho声骸工作台.app`。脚本使用或创建 `src/lite/.venv`，安装 [构建依赖](../src/lite/requirements-build.txt)，并用 [WWEcho.spec](../src/lite/WWEcho.spec) 构建包含 Python、Qt、NumPy 和默认配置的独立应用。构建机需 Python 3.9+ 和网络；架构与构建环境一致（Apple Silicon Python 生成 arm64，并非 Intel/通用包），最低系统版本由 Python/Qt 等依赖决定。
 
 - **便携式保存**：方案库在 `.app` 同级目录，例如 `~/Applications/WWEcho/weight-presets.json`，绝不写进 `.app/Contents` 或用户应用数据目录。将应用放在有写权限的普通文件夹，首次启动会创建 JSON；迁移或备份时同时携带应用与 JSON。
 - **内置当前方案**：打包时校验并将项目根目录的 `weight-presets.json` 作为只读模板包含在应用中，保留全部方案、ID 和最近选择；文件缺失或格式无效时构建失败。只有外部库不存在时才初始化，已有库不会被新版模板覆盖，也不自动合并旧版用户目录。应用内的模板和项目原文件均不会因应用中的修改而改变。分发前确认模板中的所有方案均可随应用分享。
@@ -28,7 +30,7 @@ Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.e
 
 ## 激活策略与成本口径
 
-实现见 [src/echo_strategy.py](src/echo_strategy.py)，成本见 [config/activation-costs.json](config/activation-costs.json)。以下数据由用户提供并确认，不标为官方公示数据；经验及打孔器不再使用占位值。每个解锁等级开孔一次，每次消耗 10 个打孔器；胚子每件计 1，由胚子权重表示其自定义机会成本，不含刷取成本。
+实现见 [src/echo_strategy.py](../src/echo_strategy.py)，成本见 [config/activation-costs.json](../config/activation-costs.json)。以下数据由用户提供并确认，不标为官方公示数据；经验及打孔器不再使用占位值。每个解锁等级开孔一次，每次消耗 10 个打孔器；胚子每件计 1，由胚子权重表示其自定义机会成本，不含刷取成本。
 
 **全局成品口径：分数达标后仍必须升至 +25、开满五条副词条，不允许提前结束；成功需要同时满足“分数达标”和“五条已开满”。** 强化和开孔均不会失败，随机的是词条类型与档位。未达标不等于回收；只有玩家主动选择回收才有返还。当前成本模型假设未达标且停止投入时选择回收；一旦达标则保留并强制开满，剩余经验与打孔器必须计入。若只停止投入但保留声骸，不应抵扣下面的返还。
 
@@ -65,7 +67,7 @@ Windows 用户可双击 [WWEcho声骸工作台.exe](dist/WWEcho声骸工作台.e
 
 ## 频整器概率与同预算比较
 
-实现见 [单次分析](src/echo_reconstruction.py) 与 [动态预算分析](src/echo_reconstruction_budget.py)，完整公式和假设见 [洗炼／洗词条算法说明](docs/Algorithm-Reroll.md)。复用 [config/echo-stats.json](config/echo-stats.json) 中已有重构规则与公示档位概率；无需新增配置 JSON，也不修改用户权重。
+实现见 [单次分析](../src/echo_reconstruction.py) 与 [动态预算分析](../src/echo_reconstruction_budget.py)，完整公式和假设见 [洗炼／洗词条算法说明](../docs/Algorithm-Reroll.md)。复用 [config/echo-stats.json](../config/echo-stats.json) 中已有重构规则与公示档位概率；无需新增配置 JSON，也不修改用户权重。
 
 - **正提升**：严格超过重构前原始评分，平分不计成功。主词条、小词条、锁定词条固定；未锁定的属性和档位重新随机，原未锁属性可以再次出现，副词条类型仍不重复。
 - **单次算法**：枚举类型子集，采用折半分布与前后缀矩求和；十进制原始贡献用有理数转整数严格比较，无区域 3 的分数网格近似。公示概率归一化后以浮点累加，档位与跨次独立为模型约定。
@@ -85,7 +87,7 @@ S = \frac{50}{M}\left(x_{\mathrm{main}}w_{\mathrm{main}} + x_{\mathrm{minor}}w_{
 $$
 
 - 单条贡献 = 词条数值 × 当前词条权重 ÷ 声骸未对齐最高分 $M$ × 50。
-- $M$ = 所有 Cost 主词条候选中最大的“主词条满级值 × 对应权重 + 同 Cost 小词条满级值 × 对应权重”，加上贡献最高的 5 种不同满档副词条的原始贡献。主词条与小词条必须来自同一 Cost，不能分别取跨 Cost 最大值。候选与档位见 [属性配置](config/echo-stats.json)。
+- $M$ = 所有 Cost 主词条候选中最大的“主词条满级值 × 对应权重 + 同 Cost 小词条满级值 × 对应权重”，加上贡献最高的 5 种不同满档副词条的原始贡献。主词条与小词条必须来自同一 Cost，不能分别取跨 Cost 最大值。候选与档位见 [属性配置](../config/echo-stats.json)。
 - 权重表示每单位词条数值的系数，不再表示满档分值；百分比使用百分点，固定值直接使用原数值。主、副词条分别配置，同名主副词条可以同时计分。
 - 主词条输入必须为该 Cost 的 +25 满级值；固定小词条由 Cost 自动确定，无需额外输入。分母不受当前 Cost、主词条或已激活数量影响；未激活副词条槽位贡献为 0。
 - 理论最优声骸为 50 分。所有权重均为 0 时，$M=0$，各贡献及总分均返回 0，避免除零。统一倍增全部权重不会改变对齐分数。
@@ -107,7 +109,7 @@ GUI 方案库使用程序旁的 `weight-presets.json`：源码运行时保存到
 
 以上约束针对应用业务数据：源码版安装依赖时的 pip 缓存、构建时的 PyInstaller 缓存，以及 Qt/操作系统临时文件由相应工具管理，不作为权重存储位置。单文件 EXE 运行仍可能解包到系统临时目录，但用户修改的权重始终写到 EXE 旁。
 
-通过 GUI 编辑并保存权重方案；[config/score-weights.json](config/score-weights.json) 提供初始默认权重。所有字段必须完整，权重为非负有限数值，无效属性可设为 0。
+通过 GUI 编辑并保存权重方案；[config/score-weights.json](../config/score-weights.json) 提供初始默认权重。所有字段必须完整，权重为非负有限数值，无效属性可设为 0。
 
 本地默认配置及各方案 `weights` 对象中的 `main_stats` 均以 `"1"`、`"3"`、`"4"` 为键分组，每组包含对应 Cost 的全部合法候选，可分别设置不同权重。`sub_stats` 仍为共用副词条权重。评分及全局最高分使用各 Cost 的独立权重。方案库内的 `weights` 对象仍兼容旧版不分 Cost 的扁平主词条格式，其权重会复制到各 Cost 的对应候选中；这不代表支持导入旧版单套文件。
 
@@ -128,6 +130,6 @@ GUI 方案库使用程序旁的 `weight-presets.json`：源码运行时保存到
 
 ## 测试
 
-[tests/test_echo_score.py](tests/test_echo_score.py) 覆盖评分输入、配置和非法数据；[tests/test_echo_strategy.py](tests/test_echo_strategy.py) 覆盖概率区间、阈值、回收和重复尝试成本；[tests/test_echo_gui.py](tests/test_echo_gui.py) 离屏验证真实控件和后台策略。[频整器核心测试](tests/test_echo_reconstruction.py) 以独立有理数穷举验证全部锁法、收益与预算边际；[频整器界面测试](tests/test_echo_reconstruction_gui.py) 验证五按钮、结果表格、缓存和独立异步队列。使用标准库 `unittest` 的 discover 模式运行；需安装项目运行依赖。
+[tests/test_echo_score.py](../tests/test_echo_score.py) 覆盖评分输入、配置和非法数据；[tests/test_echo_strategy.py](../tests/test_echo_strategy.py) 覆盖概率区间、阈值、回收和重复尝试成本；[tests/lite/test_echo_gui.py](../tests/lite/test_echo_gui.py) 离屏验证真实控件和后台策略。[频整器核心测试](../tests/test_echo_reconstruction.py) 以独立有理数穷举验证全部锁法、收益与预算边际；[频整器界面测试](../tests/test_echo_reconstruction_gui.py) 验证五按钮、结果表格、缓存和独立异步队列。使用标准库 `unittest` 的 discover 模式运行；需安装项目运行依赖。
 
-[tests/fixtures/echo.json](tests/fixtures/echo.json) 是评分核心测试数据，不是 GUI 输入文件。其结构与 GUI 内部输入一致，但使用中文词条名并省略可推断的 Cost；GUI 使用英文词条标识并显式传入 Cost。评分逻辑仍由 Python API 提供，应用通过 GUI 输入调用该核心。
+[tests/fixtures/echo.json](../tests/fixtures/echo.json) 是评分核心测试数据，不是 GUI 输入文件。其结构与 GUI 内部输入一致，但使用中文词条名并省略可推断的 Cost；GUI 使用英文词条标识并显式传入 Cost。评分逻辑仍由 Python API 提供，应用通过 GUI 输入调用该核心。

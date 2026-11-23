@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from enum import Enum, auto
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
-from PySide6.QtCore import QIODevice, QObject, QRunnable, QSaveFile, QSignalBlocker, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSignalBlocker, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow,
     QPlainTextEdit, QPushButton, QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from full.echo_capture import (
-    CaptureError, CaptureRegion, CaptureSnapshot, Rect, RegionPicker, ScreenInfo,
+from src.full.echo_capture import (
+    CaptureError, CaptureRegion, CaptureSnapshot, RegionPicker,
     WindowAppearance, capture_region, resolve_screen,
 )
-from full.echo_ocr import (
+from src.full.echo_ocr import (
     OCR_MAX_STATS, LocalOcrEngine, OcrError, OcrResult, OcrSelection, OcrToken, SubStatEntry,
     parse_sub_stats, validate_selection,
 )
@@ -40,64 +38,6 @@ class OcrSettings:
     region: CaptureRegion | None = None
     opacity: int = 100
     on_top: bool = False
-
-
-def _read_rect(data: dict[str, Any]) -> Rect:
-    keys = ("x", "y", "width", "height")
-    if not isinstance(data, dict) or any(type(data.get(key)) is not int for key in keys):
-        raise ValueError("坐标矩形无效")
-    return Rect(data["x"], data["y"], data["width"], data["height"])
-
-
-class OcrSettingsStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.read_error = ""
-
-    def load(self) -> OcrSettings:
-        self.read_error = ""
-        try:
-            with self.path.open(encoding="utf-8") as file:
-                data = json.load(file)
-            if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-                raise ValueError("不支持的识别设置版本")
-            opacity, on_top, saved = data["opacity"], data["on_top"], data["region"]
-            if type(opacity) is not int or not 50 <= opacity <= 100 or type(on_top) is not bool:
-                raise ValueError("透明度或置顶设置无效")
-            region = None
-            if saved is not None:
-                screen = saved["screen"]
-                name, manufacturer, model, serial, scale = (
-                    screen[key] for key in ("name", "manufacturer", "model", "serial", "scale"))
-                if not all(isinstance(item, str) for item in (name, manufacturer, model, serial)):
-                    raise ValueError("屏幕标识无效")
-                if type(scale) not in (int, float):
-                    raise ValueError("屏幕缩放无效")
-                region = CaptureRegion(
-                    ScreenInfo(name, manufacturer, model, serial, _read_rect(screen["geometry"]), scale),
-                    _read_rect(saved["rect"]),
-                )
-            return OcrSettings(region, opacity, on_top)
-        except FileNotFoundError:
-            return OcrSettings()
-        except (OSError, ValueError, KeyError, TypeError, OverflowError, CaptureError) as exc:
-            self.read_error = f"识别设置无法读取（{exc}）。请移走原文件后重启并重新配置：{self.path}"
-            return OcrSettings()
-
-    def save(self, settings: OcrSettings) -> None:
-        if self.read_error:
-            raise OSError(self.read_error)
-        payload = json.dumps({"schema_version": 1, **asdict(settings)},
-                             ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8") + b"\n"
-        file = QSaveFile(str(self.path))
-        file.setDirectWriteFallback(False)
-        if not file.open(QIODevice.OpenModeFlag.WriteOnly):
-            raise OSError(file.errorString())
-        if file.write(payload) != len(payload):
-            file.cancelWriting()
-            raise OSError(file.errorString())
-        if not file.commit():
-            raise OSError(file.errorString())
 
 
 @dataclass(frozen=True)
@@ -404,15 +344,14 @@ class OcrController(QObject):
     close_ready = Signal()
     preview_ready = Signal()
 
-    def __init__(self, window: QMainWindow, stats: dict[str, Any], settings_path: Path,
+    def __init__(self, window: QMainWindow, stats: dict[str, Any],
                  apply_selection: Callable[[OcrSelection], bool], appearance_controls: QWidget,
                  opacity_text: QLabel, opacity: QSlider, on_top: QPushButton) -> None:
         super().__init__(window)
         self.window = window
         self.stats = deepcopy(stats)
         self._apply = apply_selection
-        self.store = OcrSettingsStore(settings_path)
-        self.settings = self.store.load()
+        self.settings = OcrSettings()
         self.input_version = 0
         self.region_version = 0
         self._request_number = 0
@@ -426,7 +365,6 @@ class OcrController(QObject):
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
         self._repaint_timer = self._timer(250, self._after_desktop_repaint)
-        self._save_timer = self._timer(250, self._save_settings)
         self._close_timer = self._timer(20, self._poll_close)
 
         self.panel = QWidget(window)
@@ -450,19 +388,14 @@ class OcrController(QObject):
         self.on_top = on_top
         self.on_top.setChecked(self.settings.on_top)
         self.status = QLabel()
-        self.settings_status = QLabel()
-        for label in (self.status, self.settings_status):
-            label.setObjectName("muted")
-            label.setWordWrap(True)
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            controls_layout.addWidget(label)
-        self.settings_status.setText(self.store.read_error)
-        self.settings_status.setVisible(bool(self.store.read_error))
+        self.status.setObjectName("muted")
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        controls_layout.addWidget(self.status)
         self.pages.addWidget(self.controls_page)
         self._show_opacity()
         window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.settings.on_top)
-        self._idle("已加载识别区。截图后可在识别标签页校正并回填。" if self.settings.region else
-                   "尚未设置识别区。请框选主词条、固定小词条和完整副词条列表。")
+        self._idle("尚未设置识别区。请框选主词条、固定小词条和完整副词条列表。")
         self.select_button.clicked.connect(self.select_region)
         self.recognize_button.clicked.connect(self.recognize)
         self.opacity.valueChanged.connect(self._change_opacity)
@@ -475,16 +408,6 @@ class OcrController(QObject):
         timer.timeout.connect(callback)
         return timer
 
-    def _save_settings(self) -> None:
-        self._save_timer.stop()
-        try:
-            self.store.save(self.settings)
-        except OSError as exc:
-            self.settings_status.setText(f"当前会话设置未保存：{exc}")
-            self.settings_status.show()
-        else:
-            self.settings_status.hide()
-
     def _show_opacity(self) -> None:
         self.opacity_text.setText(f"透明度 {self.settings.opacity}%")
         self.window.setWindowOpacity(self.settings.opacity / 100)
@@ -492,12 +415,10 @@ class OcrController(QObject):
     def _change_opacity(self, value: int) -> None:
         self.settings = replace(self.settings, opacity=value)
         self._show_opacity()
-        self._save_timer.start()
 
     def _change_on_top(self, checked: bool) -> None:
         self.settings = replace(self.settings, on_top=checked)
         WindowAppearance.from_window(self.window).restore(self.window, on_top=checked)
-        self._save_settings()
 
     def _set_state(self, state: _State, message: str) -> None:
         self._state = state
@@ -562,7 +483,6 @@ class OcrController(QObject):
             else:
                 self.region_version += 1
                 self.settings = replace(self.settings, region=region)
-                self._save_settings()
                 self._idle("识别区已设置。请选择开孔过程中的可见画面再截图。")
                 return
         self._idle(f"框选失败：{error}" if error else "已取消框选，原设置未改变。")
@@ -702,8 +622,6 @@ class OcrController(QObject):
             self._current = None
             self._snapshot = None
             self._repaint_timer.stop()
-            if self._save_timer.isActive():
-                self._save_settings()
             if self._picker is not None:
                 self._picker.dispose()
                 self._picker = None

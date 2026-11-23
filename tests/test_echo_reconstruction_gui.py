@@ -16,7 +16,7 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QFrame, QLabel, QMessageBox
 
 from src import echo_reconstruction, echo_strategy
-from lite.echo_gui import EchoWindow
+from src.lite.echo_gui import EchoWindow
 from src.echo_reconstruction import ReconstructionPlanner
 from src.echo_score import EchoScorer
 
@@ -96,15 +96,15 @@ class ReconstructionGuiTests(unittest.TestCase):
     def setUp(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        path_patch = patch("lite.echo_gui.weight_presets_path",
+        path_patch = patch("src.lite.echo_gui.weight_presets_path",
                            return_value=Path(directory.name) / "weight-presets.json")
         path_patch.start()
         self.addCleanup(path_patch.stop)
-        legacy_patch = patch("lite.echo_gui.legacy_weight_presets_path",
+        legacy_patch = patch("src.lite.echo_gui.legacy_weight_presets_path",
                      return_value=Path(directory.name) / "legacy" / "weight-presets.json")
         legacy_patch.start()
         self.addCleanup(legacy_patch.stop)
-        dialog_patch = patch("lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
+        dialog_patch = patch("src.lite.echo_gui.QMessageBox.exec", return_value=QMessageBox.StandardButton.Discard)
         dialog_patch.start()
         self.addCleanup(dialog_patch.stop)
         FastActivationPlanner.reset()
@@ -600,7 +600,7 @@ class ReconstructionGuiTests(unittest.TestCase):
         self.wait_for_result()
         original = self.window._reconstruction_result
         self.window.weight_inputs["sub_stats"]["crit_rate"].setValue(7)
-        with patch("lite.echo_gui.QInputDialog.getText", return_value=("频整测试", True)):
+        with patch("src.lite.echo_gui.QInputDialog.getText", return_value=("频整测试", True)):
             self.assertTrue(self.window.save_weights_as())
         self.wait_for_result()
         self.assertNotEqual(self.window._reconstruction_result, original)
