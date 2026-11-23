@@ -107,7 +107,6 @@ OCR 运行库、ONNX 模型和第三方许可信息随构建产物打包。运�
 - [总体定义与术语](docs/General-Definition.md)
 - [调频／开孔算法说明](docs/Algorithm-Tuning.md)
 - [洗炼／洗词条算法说明](docs/Algorithm-Reroll.md)
-- [截图识别实施范围与验收要求](docs/OCR-Implementation-Plan.md)
 
 ## 运行测试
 

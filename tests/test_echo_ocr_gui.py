@@ -150,6 +150,9 @@ class EchoOcrGuiTests(unittest.TestCase):
 
     def test_appearance_controls_are_compact_and_outside_both_input_tabs(self):
         controls = self.ocr.appearance_controls
+        self.assertIs(controls, self.window.appearance_controls)
+        self.assertIs(self.ocr.opacity, self.window.opacity)
+        self.assertIs(self.ocr.on_top, self.window.on_top)
         group = self.window.sub_stat_tabs.parentWidget()
         hint = next(label for label in group.findChildren(QLabel)
                     if label.text() == "选择一种方式录入副词条。")

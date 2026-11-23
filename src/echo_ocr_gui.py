@@ -405,7 +405,8 @@ class OcrController(QObject):
     preview_ready = Signal()
 
     def __init__(self, window: QMainWindow, stats: dict[str, Any], settings_path: Path,
-                 apply_selection: Callable[[OcrSelection], bool]) -> None:
+                 apply_selection: Callable[[OcrSelection], bool], appearance_controls: QWidget,
+                 opacity_text: QLabel, opacity: QSlider, on_top: QPushButton) -> None:
         super().__init__(window)
         self.window = window
         self.stats = deepcopy(stats)
@@ -442,24 +443,12 @@ class OcrController(QObject):
         actions.addWidget(self.recognize_button)
         actions.addStretch()
         controls_layout.addLayout(actions)
-        self.appearance_controls = QWidget(window)
-        appearance = QHBoxLayout(self.appearance_controls)
-        appearance.setContentsMargins(0, 0, 0, 0)
-        appearance.setSpacing(8)
-        self.opacity_text = QLabel()
-        self.opacity_text.setObjectName("muted")
-        self.opacity = QSlider(Qt.Orientation.Horizontal)
-        self.opacity.setRange(50, 100)
-        self.opacity.setFixedWidth(96)
-        self.opacity.setAccessibleName("窗口透明度")
+        self.appearance_controls = appearance_controls
+        self.opacity_text = opacity_text
+        self.opacity = opacity
         self.opacity.setValue(self.settings.opacity)
-        self.on_top = QPushButton("置顶")
-        self.on_top.setObjectName("onTop")
-        self.on_top.setCheckable(True)
+        self.on_top = on_top
         self.on_top.setChecked(self.settings.on_top)
-        appearance.addWidget(self.opacity_text)
-        appearance.addWidget(self.opacity)
-        appearance.addWidget(self.on_top)
         self.status = QLabel()
         self.settings_status = QLabel()
         for label in (self.status, self.settings_status):

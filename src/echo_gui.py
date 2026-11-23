@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QIcon, QMouseEven
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStyledItemDelegate, QTabBar, QTabWidget, QToolButton,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyledItemDelegate, QTabBar, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -457,9 +457,26 @@ class EchoWindow(QMainWindow):
         self.resize(980, 940)
         self.setMinimumSize(760, 680)
         self.setStyleSheet(STYLE)
+        self.appearance_controls = QWidget(self)
+        appearance = QHBoxLayout(self.appearance_controls)
+        appearance.setContentsMargins(0, 0, 0, 0)
+        appearance.setSpacing(8)
+        self.opacity_text = QLabel()
+        self.opacity_text.setObjectName("muted")
+        self.opacity = QSlider(Qt.Orientation.Horizontal)
+        self.opacity.setRange(50, 100)
+        self.opacity.setFixedWidth(96)
+        self.opacity.setAccessibleName("窗口透明度")
+        self.on_top = QPushButton("置顶")
+        self.on_top.setObjectName("onTop")
+        self.on_top.setCheckable(True)
+        appearance.addWidget(self.opacity_text)
+        appearance.addWidget(self.opacity)
+        appearance.addWidget(self.on_top)
         self.ocr = OcrController(
             self, self.stats, ocr_settings_path if ocr_settings_path is not None
             else local_presets.parent / "ocr-settings.json", self.apply_ocr_selection,
+            self.appearance_controls, self.opacity_text, self.opacity, self.on_top,
         )
         self.ocr.close_ready.connect(self.close)
         scroll = QScrollArea()
@@ -797,7 +814,7 @@ class EchoWindow(QMainWindow):
         hint.setWordWrap(True)
         self.sub_input_toolbar = QHBoxLayout()
         self.sub_input_toolbar.addWidget(hint, 1)
-        self.sub_input_toolbar.addWidget(self.ocr.appearance_controls)
+        self.sub_input_toolbar.addWidget(self.appearance_controls)
         layout.addLayout(self.sub_input_toolbar)
         header = QGridLayout()
         self.cost = WheelSafeComboBox()
