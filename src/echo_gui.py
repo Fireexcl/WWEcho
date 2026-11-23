@@ -11,12 +11,12 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QIODevice, QObject, QPoint, QRunnable, QSaveFile, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QCloseEvent, QCursor, QFont, QIcon, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLayout, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStyledItemDelegate, QTabBar, QTabWidget, QToolButton,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyledItemDelegate, QTabBar, QTabWidget, QToolButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -69,6 +69,9 @@ QPushButton#clearSelection { background: #fff3e6; color: #a65316; border-color: 
 QPushButton#clearSelection:hover { background: #ffe6cc; border-color: #dfac77; }
 QPushButton#lockStat { padding: 8px 4px; }
 QPushButton:disabled { background: #f1f4f8; color: #8c99ab; border-color: #e4e9f0; }
+QPushButton#onTop:checked { background: #15803d; color: white; border-color: #15803d; }
+QPushButton#onTop:checked:hover { background: #166534; border-color: #166534; }
+QPushButton#onTop:checked:pressed { background: #14532d; border-color: #14532d; }
 QPushButton#primary { background: #2563eb; color: white; border-color: #2563eb; }
 QPushButton#primary:hover { background: #1d4ed8; }
 QPushButton:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
@@ -401,6 +404,8 @@ class EchoWindow(QMainWindow):
             self.cost_defaults = activation_defaults({})
         self.defaults = normalize_weights(self.stats, self.defaults)
         local_presets = presets_path if presets_path is not None else weight_presets_path()
+        self._appearance_settings_path = local_presets.parent / "window-settings.json"
+        self._appearance_read_error = ""
         self.preset_store = WeightPresetStore(
             local_presets, self.stats, self.defaults,
             legacy_path=initial_weight_presets_path()
@@ -778,13 +783,104 @@ class EchoWindow(QMainWindow):
             for box in inputs.values():
                 box.interpretText()
 
+    def _load_appearance_settings(self) -> tuple[int, bool]:
+        try:
+            with self._appearance_settings_path.open(encoding="utf-8") as file:
+                data = json.load(file)
+            if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+                raise ValueError("不支持的窗口设置版本")
+            opacity, on_top = data["opacity"], data["on_top"]
+            if type(opacity) is not int or not 50 <= opacity <= 100 or type(on_top) is not bool:
+                raise ValueError("透明度或置顶设置无效")
+            return opacity, on_top
+        except FileNotFoundError:
+            return 100, False
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self._appearance_read_error = (
+                f"窗口设置无法读取（{exc}）。请移走原文件后重启并重新配置：{self._appearance_settings_path}"
+            )
+            return 100, False
+
+    def _save_appearance_settings(self) -> None:
+        self._appearance_save_timer.stop()
+        try:
+            if self._appearance_read_error:
+                raise OSError(self._appearance_read_error)
+            payload = json.dumps(
+                {"schema_version": 1, "opacity": self.opacity.value(), "on_top": self.on_top.isChecked()},
+                ensure_ascii=False, indent=2,
+            ).encode("utf-8") + b"\n"
+            file = QSaveFile(str(self._appearance_settings_path))
+            file.setDirectWriteFallback(False)
+            if not file.open(QIODevice.OpenModeFlag.WriteOnly):
+                raise OSError(file.errorString())
+            if file.write(payload) != len(payload):
+                file.cancelWriting()
+                raise OSError(file.errorString())
+            if not file.commit():
+                raise OSError(file.errorString())
+        except OSError as exc:
+            self.appearance_status.setText(f"当前会话窗口设置未保存：{exc}")
+            self.appearance_status.show()
+        else:
+            self.appearance_status.hide()
+
+    def _change_opacity(self, value: int) -> None:
+        self.opacity_text.setText(f"透明度 {value}%")
+        self.setWindowOpacity(value / 100)
+        self._appearance_save_timer.start()
+
+    def _change_on_top(self, checked: bool) -> None:
+        geometry, state, visible = self.saveGeometry(), self.windowState(), self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)
+        self.restoreGeometry(geometry)
+        self.setWindowState(state)
+        self.setVisible(visible)
+        self._save_appearance_settings()
+
     def _stats_panel(self) -> QGroupBox:
         group = QGroupBox("02  声骸词条与档位选择")
         layout = QVBoxLayout(group)
         hint = QLabel("直接点击词条名进行勾选，再次点击可取消勾选。")
         hint.setObjectName("muted")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        opacity, on_top = self._load_appearance_settings()
+        self.appearance_controls = QWidget(self)
+        appearance = QHBoxLayout(self.appearance_controls)
+        appearance.setContentsMargins(0, 0, 0, 0)
+        appearance.setSpacing(8)
+        self.opacity_text = QLabel(f"透明度 {opacity}%")
+        self.opacity_text.setObjectName("muted")
+        self.opacity = QSlider(Qt.Orientation.Horizontal)
+        self.opacity.setRange(50, 100)
+        self.opacity.setFixedWidth(96)
+        self.opacity.setAccessibleName("窗口透明度")
+        self.opacity.setValue(opacity)
+        self.on_top = QPushButton("置顶")
+        self.on_top.setObjectName("onTop")
+        self.on_top.setCheckable(True)
+        self.on_top.setChecked(on_top)
+        appearance.addWidget(self.opacity_text)
+        appearance.addWidget(self.opacity)
+        appearance.addWidget(self.on_top)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(hint, 1)
+        toolbar.addWidget(self.appearance_controls)
+        layout.addLayout(toolbar)
+        self.appearance_status = QLabel(self._appearance_read_error)
+        self.appearance_status.setObjectName("muted")
+        self.appearance_status.setWordWrap(True)
+        self.appearance_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.appearance_status.setVisible(bool(self._appearance_read_error))
+        layout.addWidget(self.appearance_status)
+        self._appearance_save_timer = QTimer(self)
+        self._appearance_save_timer.setSingleShot(True)
+        self._appearance_save_timer.setInterval(250)
+        self._appearance_save_timer.timeout.connect(self._save_appearance_settings)
+        self.setWindowOpacity(opacity / 100)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
+        self.opacity.valueChanged.connect(self._change_opacity)
+        self.on_top.toggled.connect(self._change_on_top)
         header = QGridLayout()
         self.cost = QComboBox()
         for cost in (1, 3, 4):
@@ -1608,6 +1704,8 @@ class EchoWindow(QMainWindow):
         if not self._closing and not self._confirm_unsaved_weights():
             event.ignore()
             return
+        if self._appearance_save_timer.isActive():
+            self._save_appearance_settings()
         self._closing = True
         self._strategy_version += 1
         self._strategy_timer.stop()

@@ -5,3 +5,4 @@ __pycache__/
 /dist/
 /weight-presets.json.lock
 /.weight-presets.json.*.tmp
+/window-settings.json

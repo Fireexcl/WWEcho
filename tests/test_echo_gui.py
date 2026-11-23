@@ -127,6 +127,55 @@ class EchoGuiTests(unittest.TestCase):
         self.assertFalse(self.window.windowIcon().isNull())
         self.assertFalse(self.app.windowIcon().isNull())
 
+    def test_window_appearance_controls_save_and_restore(self):
+        self.window.show()
+        self.app.processEvents()
+        self.assertEqual(self.window.opacity.minimum(), 50)
+        self.assertEqual(self.window.opacity.maximum(), 100)
+        self.assertLessEqual(self.window.opacity.maximumWidth(), 100)
+        self.window.opacity.setValue(60)
+        self.window.on_top.click()
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        settings = self.presets_path.parent / "window-settings.json"
+        self.assertEqual(json.loads(settings.read_text(encoding="utf-8")),
+                         {"schema_version": 1, "opacity": 60, "on_top": True})
+        restored = EchoWindow(presets_path=self.presets_path)
+        try:
+            self.assertEqual(restored.opacity.value(), 60)
+            self.assertEqual(restored.opacity_text.text(), "透明度 60%")
+            self.assertTrue(restored.on_top.isChecked())
+            self.assertTrue(restored.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+            restored.on_top.click()
+            self.assertFalse(restored.isVisible())
+            self.assertFalse(restored.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        finally:
+            restored.close()
+            restored.deleteLater()
+
+    def test_window_appearance_flushes_pending_opacity_and_reports_errors(self):
+        self.window.opacity.setValue(75)
+        self.window.close()
+        settings = self.presets_path.parent / "window-settings.json"
+        self.assertEqual(json.loads(settings.read_text(encoding="utf-8"))["opacity"], 75)
+        settings.write_text("invalid json", encoding="utf-8")
+        restored = EchoWindow(presets_path=self.presets_path)
+        try:
+            self.assertIn("无法读取", restored.appearance_status.text())
+            restored.on_top.click()
+            self.assertIn("未保存", restored.appearance_status.text())
+            self.assertEqual(settings.read_text(encoding="utf-8"), "invalid json")
+        finally:
+            restored.close()
+            restored.deleteLater()
+
+    def test_window_appearance_reports_save_failure(self):
+        self.window._appearance_settings_path = self.presets_path.parent / "missing" / "settings.json"
+        self.window.on_top.click()
+        self.assertTrue(self.window.on_top.isChecked())
+        self.assertIn("未保存", self.window.appearance_status.text())
+        self.assertFalse(self.window.appearance_status.isHidden())
+
     def choose_example(self):
         stat_ids = ["crit_rate", "crit_dmg", "atk_pct", "energy_regen", "basic_atk_dmg_bonus"]
         for stat_id in list(self.window.selected_sub_stats):
@@ -506,9 +555,11 @@ class EchoGuiTests(unittest.TestCase):
 
     def test_stats_divider_and_clear_button_style(self):
         layout = self.window.stats_divider.parentWidget().layout()
-        self.assertEqual(layout.itemAt(0).widget().text(), "直接点击词条名进行勾选，再次点击可取消勾选。")
-        self.assertIs(layout.itemAt(2).widget(), self.window.stats_divider)
-        self.assertIs(layout.itemAt(3).layout(), self.window.sub_options_layout)
+        toolbar = layout.itemAt(0).layout()
+        self.assertEqual(toolbar.itemAt(0).widget().text(), "直接点击词条名进行勾选，再次点击可取消勾选。")
+        self.assertIs(toolbar.itemAt(1).widget(), self.window.appearance_controls)
+        self.assertIs(layout.itemAt(3).widget(), self.window.stats_divider)
+        self.assertIs(layout.itemAt(4).layout(), self.window.sub_options_layout)
         self.assertEqual(self.window.minor_stat_label.contentsMargins().left(), 8)
         self.assertEqual(self.window.clear_sub_stats_button.objectName(), "clearSelection")
         self.assertEqual(self.window.width(), 980)
